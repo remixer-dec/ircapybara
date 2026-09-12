@@ -6,3 +6,4 @@
 /go.test.mod
 /go.test.sum
 *.zip
+run-local.sh

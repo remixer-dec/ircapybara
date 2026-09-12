@@ -60,6 +60,11 @@ type Channel struct {
 	Participants        map[string]struct{}
 	SessionParticipants map[*Client]struct{}
 	History             []HistoryMessage
+
+	// PluginOwned channels exist only in RAM. OwnerIdentity, when set, may join
+	// an invite-only plugin channel without an explicit INVITE.
+	PluginOwned   bool
+	OwnerIdentity string
 }
 
 type CaptchaState struct {
@@ -70,6 +75,7 @@ type CaptchaState struct {
 }
 
 type Client struct {
+	ID        string
 	Conn      net.Conn
 	RemoteIP  net.IP
 	Connected time.Time
@@ -80,10 +86,12 @@ type Client struct {
 	Realname       string
 	Registered     bool
 	CapNegotiating bool
+	Capabilities   map[string]bool
 	IsOper         bool
 
 	ServerPassOK       bool
 	IdentityAuthedNick string
+	IdentityReadOnly   bool
 	ExtendedMode       bool
 	Captcha            CaptchaState
 

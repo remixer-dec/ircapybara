@@ -127,17 +127,47 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 		s.badParams(c, "CAP")
 		return false, ""
 	}
+	if c.Capabilities == nil {
+		c.Capabilities = make(map[string]bool)
+	}
+	const offered = "server-time ircapybara/history"
 	switch {
 	case strings.HasPrefix(args, "LS"):
 		if !c.Registered {
 			c.CapNegotiating = true
 		}
-		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LS :")
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LS :"+offered)
 	case args == "LIST":
-		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LIST :")
+		var enabled []string
+		for _, name := range []string{"server-time", "ircapybara/history"} {
+			if c.Capabilities[name] {
+				enabled = append(enabled, name)
+			}
+		}
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LIST :"+strings.Join(enabled, " "))
 	case strings.HasPrefix(args, "REQ :"):
-		// v0.1 advertises no capabilities, so every syntactically valid request is rejected.
-		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" NAK :"+strings.TrimPrefix(args, "REQ :"))
+		raw := strings.TrimPrefix(args, "REQ :")
+		requested := strings.Split(raw, " ")
+		valid := true
+		for _, item := range requested {
+			name := strings.TrimPrefix(item, "-")
+			if name != "server-time" && name != "ircapybara/history" {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" NAK :"+raw)
+			return false, ""
+		}
+		for _, item := range requested {
+			if strings.HasPrefix(item, "-") {
+				delete(c.Capabilities, strings.TrimPrefix(item, "-"))
+			} else {
+				c.Capabilities[item] = true
+			}
+		}
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" ACK :"+raw)
 	case args == "END":
 		c.CapNegotiating = false
 		return s.maybeRegister(c)
@@ -172,13 +202,26 @@ func (s *Server) cmdIDENTIFY(c *model.Client, args string) (bool, string) {
 		s.badParams(c, "IDENTIFY")
 		return false, ""
 	}
-	norm := protocol.Norm(m[1])
+	nick := m[1]
+	password := m[2]
+	if nick == "" {
+		if !protocol.NickRE.MatchString(c.Nick) {
+			s.badParams(c, "IDENTIFY")
+			return false, ""
+		}
+		nick = c.Nick
+	}
+	norm := protocol.Norm(nick)
 	cred, ok := s.identity(norm)
-	if !ok || !security.VerifyPassword(m[2], cred.Salt, cred.Hash) {
+	if !ok || !security.VerifyPassword(password, cred.Salt, cred.Hash) {
 		s.numeric(c, "464", ":Identity password incorrect")
 		return false, ""
 	}
 	c.IdentityAuthedNick = norm
+	if protocol.Norm(c.Nick) == norm {
+		c.IdentityReadOnly = false
+	}
+	s.rememberIdentityIP(c.RemoteIP, norm)
 	s.notice(c, "Identity authenticated for "+cred.NickDisplay)
 	return false, ""
 }
@@ -193,10 +236,13 @@ func (s *Server) cmdNICK(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	norm := protocol.Norm(args)
-	if _, protected := s.identity(norm); protected && c.IdentityAuthedNick != norm {
-		s.numeric(c, "464", args+" :Nickname is registered; use IDENTIFY first")
-		return false, ""
+	_, protected := s.identity(norm)
+	autoIdentified := false
+	if protected && c.IdentityAuthedNick != norm && s.identityIPTrusted(c.RemoteIP, norm) {
+		c.IdentityAuthedNick = norm
+		autoIdentified = true
 	}
+	identityReadOnly := protected && c.IdentityAuthedNick != norm
 
 	oldPrefix := s.prefix(c)
 	oldNick := c.Nick
@@ -217,7 +263,11 @@ func (s *Server) cmdNICK(c *model.Client, args string) (bool, string) {
 		}
 	}
 	c.Nick = args
+	c.IdentityReadOnly = identityReadOnly
 	s.mu.Unlock()
+	if autoIdentified {
+		s.notice(c, "Identity restored from trusted IP for "+args)
+	}
 	if c.Registered && oldNick != "" && oldNick != args {
 		line := fmt.Sprintf(":%s NICK :%s", oldPrefix, args)
 		for member := range recipients {
@@ -338,7 +388,9 @@ func (s *Server) cmdREGISTER(c *model.Client, args string) (bool, string) {
 	s.identities[norm] = model.Credential{NickDisplay: c.Nick, Salt: salt, Hash: hash, CreatedAt: createdAt}
 	s.mu.Unlock()
 	c.IdentityAuthedNick = norm
-	s.notice(c, "Nickname registered; use IDENTIFY <nick> <password> before claiming it on future connections")
+	c.IdentityReadOnly = false
+	s.rememberIdentityIP(c.RemoteIP, norm)
+	s.notice(c, "Nickname registered; future connections may use IDENTIFY <password> or IDENTIFY <nick> <password>")
 	return false, ""
 }
 
@@ -370,7 +422,7 @@ func (s *Server) cmdJOIN(c *model.Client, args string) (bool, string) {
 		s.numeric(c, "474", name+" :Cannot join channel (+b)")
 		return false, ""
 	}
-	if ch.Modes.InviteOnly && !ch.Invited[c] && !c.IsOper {
+	if ch.Modes.InviteOnly && !ch.Invited[c] && !c.IsOper && !(ch.PluginOwned && ch.OwnerIdentity != "" && ch.OwnerIdentity == c.IdentityAuthedNick) {
 		s.mu.Unlock()
 		s.numeric(c, "473", name+" :Cannot join channel (+i)")
 		return false, ""
@@ -924,6 +976,21 @@ func (s *Server) channelAdminLocked(c *model.Client, ch *model.Channel) bool {
 
 func (s *Server) cmdMODE(c *model.Client, args string) (bool, string) {
 	if !s.requireRegistered(c) {
+		return false, ""
+	}
+	if bm := protocol.ModeBanListArgsRE.FindStringSubmatch(args); bm != nil {
+		norm := protocol.Norm(bm[1])
+		s.mu.RLock()
+		ch := s.channels[norm]
+		s.mu.RUnlock()
+		if ch == nil || !s.canInspectChannel(c, ch) {
+			s.numeric(c, "403", bm[1]+" :No such channel")
+			return false, ""
+		}
+		for _, b := range s.protection.ListBans("CHANNEL", norm) {
+			s.numeric(c, "367", ch.Name+" "+banMask(b))
+		}
+		s.numeric(c, "368", ch.Name+" :End of channel ban list")
 		return false, ""
 	}
 	m := protocol.ModeArgsRE.FindStringSubmatch(args)

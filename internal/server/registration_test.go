@@ -12,6 +12,8 @@ import (
 	"ircapybara/internal/config"
 	"ircapybara/internal/model"
 	"ircapybara/internal/protection"
+	"ircapybara/internal/protocol"
+	"ircapybara/internal/security"
 )
 
 type memoryConn struct{ bytes.Buffer }
@@ -156,5 +158,121 @@ func TestServeClientExactModernRegistrationSequence(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("serveClient did not stop after peer close")
+	}
+}
+
+func TestCAPAcceptsIRCapybaraHistory(t *testing.T) {
+	conn := &memoryConn{}
+	c := &model.Client{Conn: conn, RemoteIP: net.ParseIP("127.0.0.1"), ServerPassOK: true}
+	s := newRegistrationTestServer(c)
+	if disconnect, _ := s.cmdCAP(c, "REQ :server-time ircapybara/history"); disconnect {
+		t.Fatal("CAP REQ must not disconnect")
+	}
+	if !c.Capabilities["server-time"] || !c.Capabilities["ircapybara/history"] {
+		t.Fatalf("capabilities not enabled: %#v", c.Capabilities)
+	}
+	if !strings.Contains(conn.String(), " ACK :server-time ircapybara/history") {
+		t.Fatalf("expected ACK, got %q", conn.String())
+	}
+}
+
+func registeredCredential(t *testing.T, nick, password string) model.Credential {
+	t.Helper()
+	salt, hash, err := security.NewPasswordHash(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model.Credential{NickDisplay: nick, Salt: salt, Hash: hash, CreatedAt: time.Now().Add(-time.Hour)}
+}
+
+func TestRegisteredNickCompletesRegistrationReadOnlyUntilIdentify(t *testing.T) {
+	conn := &memoryConn{}
+	c := &model.Client{Conn: conn, RemoteIP: net.ParseIP("127.0.0.1"), ServerPassOK: true, Capabilities: make(map[string]bool)}
+	s := newRegistrationTestServer(c)
+	s.identities["registereduser"] = registeredCredential(t, "registereduser", "password1")
+	s.channels["#general"] = &model.Channel{
+		Name: "#general", Norm: "#general", Topic: "General", HistoryEnabled: true,
+		Members: make(map[*model.Client]*model.Membership), Invited: make(map[*model.Client]bool),
+		Participants: make(map[string]struct{}), SessionParticipants: make(map[*model.Client]struct{}),
+	}
+
+	s.cmdCAP(c, "LS 302")
+	s.cmdNICK(c, "registereduser")
+	if !c.IdentityReadOnly {
+		t.Fatal("registered nick must enter identity read-only mode before IDENTIFY")
+	}
+	if strings.Contains(conn.String(), " 464 ") {
+		t.Fatalf("NICK must not be rejected for an unidentified registered nick: %q", conn.String())
+	}
+	s.cmdUSER(c, "registereduser 0 * User")
+	s.cmdCAP(c, "REQ :server-time")
+	s.cmdCAP(c, "END")
+	if !c.Registered {
+		t.Fatal("registered nickname must still complete IRC registration")
+	}
+	if !strings.Contains(conn.String(), " 001 registereduser ") {
+		t.Fatalf("expected welcome numeric, got %q", conn.String())
+	}
+	if disconnect, _ := s.cmdJOIN(c, "#general"); disconnect {
+		t.Fatal("read-only identity must be able to join channels")
+	}
+	if _, ok := s.channels["#general"].Members[c]; !ok {
+		t.Fatal("read-only identity should be visible as a channel member")
+	}
+	if s.identityReadOnlyCommandAllowed(protocol.Command{Name: "PRIVMSG", Args: "#general :hello"}) {
+		t.Fatal("read-only identity must not be allowed to publish messages")
+	}
+	if !s.identityReadOnlyCommandAllowed(protocol.Command{Name: "MODE", Args: "#general b"}) {
+		t.Fatal("read-only identity must be allowed to query ban lists")
+	}
+
+	s.cmdIDENTIFY(c, "password1")
+	if c.IdentityReadOnly || c.IdentityAuthedNick != "registereduser" {
+		t.Fatal("password-only IDENTIFY should authenticate current nick and leave read-only mode")
+	}
+}
+
+func TestIdentifyTrustIPIsRuntimeAndIdentitySpecific(t *testing.T) {
+	first := &model.Client{Conn: &memoryConn{}, RemoteIP: net.ParseIP("192.0.2.10"), ServerPassOK: true}
+	s := newRegistrationTestServer(first)
+	s.cfg.IdentifyTrustIP = true
+	s.identities["alice"] = registeredCredential(t, "alice", "password1")
+	s.identities["bob"] = registeredCredential(t, "bob", "password2")
+
+	first.Nick = "alice"
+	first.IdentityReadOnly = true
+	s.cmdIDENTIFY(first, "password1")
+	if !s.identityIPTrusted(first.RemoteIP, "alice") {
+		t.Fatal("successful IDENTIFY should remember the IP/identity pair")
+	}
+
+	second := &model.Client{Conn: &memoryConn{}, RemoteIP: net.ParseIP("192.0.2.10"), ServerPassOK: true}
+	s.clients[second] = struct{}{}
+	s.cmdNICK(second, "alice")
+	if second.IdentityReadOnly || second.IdentityAuthedNick != "alice" {
+		t.Fatal("same identity from remembered IP should be restored automatically")
+	}
+
+	third := &model.Client{Conn: &memoryConn{}, RemoteIP: net.ParseIP("192.0.2.10"), ServerPassOK: true}
+	s.clients[third] = struct{}{}
+	s.cmdNICK(third, "bob")
+	if !third.IdentityReadOnly || third.IdentityAuthedNick != "" {
+		t.Fatal("remembering alice must not authorize bob from the same IP")
+	}
+}
+
+func TestModeBareBQueriesBanList(t *testing.T) {
+	conn := &memoryConn{}
+	c := &model.Client{Conn: conn, RemoteIP: net.ParseIP("127.0.0.1"), Nick: "alice", Username: "alice", Registered: true, ServerPassOK: true}
+	s := newRegistrationTestServer(c)
+	s.channels["#general"] = &model.Channel{
+		Name: "#general", Norm: "#general", Members: map[*model.Client]*model.Membership{c: {}},
+		Invited: make(map[*model.Client]bool), Participants: make(map[string]struct{}), SessionParticipants: make(map[*model.Client]struct{}),
+	}
+	if disconnect, _ := s.cmdMODE(c, "#general b"); disconnect {
+		t.Fatal("MODE #channel b must not disconnect")
+	}
+	if !strings.Contains(conn.String(), " 368 alice #general :End of channel ban list") {
+		t.Fatalf("expected ban-list terminator, got %q", conn.String())
 	}
 }

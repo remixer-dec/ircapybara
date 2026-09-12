@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -30,15 +31,17 @@ type Server struct {
 	store   *storage.Store
 	plugins []pluginapi.Plugin
 
-	mu         sync.RWMutex
-	clients    map[*model.Client]struct{}
-	channels   map[string]*model.Channel
-	identities map[string]model.Credential
+	mu                 sync.RWMutex
+	clients            map[*model.Client]struct{}
+	channels           map[string]*model.Channel
+	identities         map[string]model.Credential
+	trustedIdentityIPs map[string]map[string]struct{}
 
 	protection     *protection.Manager
 	operCred       model.Credential
 	serverPassCred *model.Credential
 	startedAt      time.Time
+	nextClientID   atomic.Uint64
 }
 
 func New(cfg config.Config, store *storage.Store, plugins []pluginapi.Plugin) (*Server, error) {
@@ -63,15 +66,16 @@ func New(cfg config.Config, store *storage.Store, plugins []pluginapi.Plugin) (*
 		return nil, err
 	}
 	s := &Server{
-		cfg:        cfg,
-		store:      store,
-		plugins:    plugins,
-		clients:    make(map[*model.Client]struct{}),
-		channels:   channels,
-		identities: identities,
-		protection: protection.New(bans, cfg.GuardLevel, cfg.GuardAllowedIPs, cfg.GuardAllowedUsers),
-		operCred:   model.Credential{NickDisplay: cfg.OperName, Salt: operSalt, Hash: operHash},
-		startedAt:  time.Now(),
+		cfg:                cfg,
+		store:              store,
+		plugins:            plugins,
+		clients:            make(map[*model.Client]struct{}),
+		channels:           channels,
+		identities:         identities,
+		trustedIdentityIPs: make(map[string]map[string]struct{}),
+		protection:         protection.New(bans, cfg.GuardLevel, cfg.GuardAllowedIPs, cfg.GuardAllowedUsers),
+		operCred:           model.Credential{NickDisplay: cfg.OperName, Salt: operSalt, Hash: operHash},
+		startedAt:          time.Now(),
 	}
 	s.cfg.OperPassword = ""
 	if cfg.ServerPassword != "" {
@@ -81,6 +85,11 @@ func New(cfg config.Config, store *storage.Store, plugins []pluginapi.Plugin) (*
 		}
 		s.serverPassCred = &model.Credential{Salt: salt, Hash: hash}
 		s.cfg.ServerPassword = ""
+	}
+	for _, p := range s.plugins {
+		if err := p.Init(s); err != nil {
+			return nil, fmt.Errorf("plugin %s init: %w", p.Name(), err)
+		}
 	}
 	return s, nil
 }
@@ -123,6 +132,7 @@ func (s *Server) ListenAndServe() error {
 			continue
 		}
 		c := &model.Client{
+			ID:           fmt.Sprintf("c%d", s.nextClientID.Add(1)),
 			Conn:         conn,
 			RemoteIP:     ip,
 			Connected:    time.Now(),
@@ -130,6 +140,7 @@ func (s *Server) ListenAndServe() error {
 			Tokens:       s.cfg.RateBurst,
 			TokenUpdated: time.Now(),
 			ServerPassOK: s.serverPassCred == nil,
+			Capabilities: make(map[string]bool),
 		}
 		s.mu.Lock()
 		s.clients[c] = struct{}{}
@@ -238,6 +249,13 @@ func (s *Server) serveClient(c *model.Client) {
 			}
 		}
 
+		if c.Registered && c.IdentityReadOnly && !s.identityReadOnlyCommandAllowed(cmd) {
+			if cmd.Name != "NOTICE" {
+				s.notice(c, "Registered nickname is read-only until IDENTIFY succeeds")
+			}
+			continue
+		}
+
 		if s.protection.GuardLevel() == 3 && !s.readOnlyCommandAllowed(cmd) {
 			if cmd.Name != "NOTICE" {
 				s.notice(c, "Guard level 3: server is read-only")
@@ -245,14 +263,25 @@ func (s *Server) serveClient(c *model.Client) {
 			continue
 		}
 
+		event := pluginapi.CommandEvent{Client: s.clientView(c), Command: cmd.Name, Args: cmd.Args}
 		denied := false
 		for _, p := range s.plugins {
-			if err := p.BeforeCommand(pluginapi.CommandEvent{Client: s.clientView(c), Command: cmd.Name, Args: cmd.Args}); err != nil {
+			if err := p.BeforeCommand(event); err != nil {
 				denied = true
 				break
 			}
 		}
 		if denied {
+			continue
+		}
+		handled := false
+		for _, p := range s.plugins {
+			if h, ok := p.(pluginapi.CommandHandler); ok && h.HandleCommand(event) {
+				handled = true
+				break
+			}
+		}
+		if handled {
 			continue
 		}
 
@@ -282,7 +311,11 @@ func (s *Server) consumeToken(c *model.Client) bool {
 }
 
 func (s *Server) clientView(c *model.Client) pluginapi.ClientView {
-	return pluginapi.ClientView{Nick: c.Nick, Username: c.Username, IP: c.RemoteIP.String(), IsOper: c.IsOper, Extended: c.ExtendedMode}
+	return pluginapi.ClientView{
+		ID: c.ID, Nick: c.Nick, Username: c.Username, Identity: c.IdentityAuthedNick,
+		IP: c.RemoteIP.String(), Registered: c.Registered, IsOper: c.IsOper,
+		Extended: c.ExtendedMode, HistoryCap: c.Capabilities["ircapybara/history"],
+	}
 }
 
 func (s *Server) prefix(c *model.Client) string {
@@ -365,6 +398,35 @@ func (s *Server) identity(norm string) (model.Credential, bool) {
 	return cred, ok
 }
 
+func (s *Server) rememberIdentityIP(ip net.IP, identity string) {
+	if !s.cfg.IdentifyTrustIP || ip == nil || !protocol.NickRE.MatchString(identity) {
+		return
+	}
+	ipKey := ip.String()
+	identity = protocol.Norm(identity)
+	s.mu.Lock()
+	if s.trustedIdentityIPs == nil {
+		s.trustedIdentityIPs = make(map[string]map[string]struct{})
+	}
+	set := s.trustedIdentityIPs[ipKey]
+	if set == nil {
+		set = make(map[string]struct{})
+		s.trustedIdentityIPs[ipKey] = set
+	}
+	set[identity] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) identityIPTrusted(ip net.IP, identity string) bool {
+	if !s.cfg.IdentifyTrustIP || ip == nil || !protocol.NickRE.MatchString(identity) {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.trustedIdentityIPs[ip.String()][protocol.Norm(identity)]
+	return ok
+}
+
 func (s *Server) maybeRegister(c *model.Client) (bool, string) {
 	if c.Registered || c.CapNegotiating || c.Nick == "" || c.Username == "" || !c.ServerPassOK {
 		return false, ""
@@ -383,6 +445,9 @@ func (s *Server) maybeRegister(c *model.Client) (bool, string) {
 	s.numeric(c, "375", ":- IRCapybara Message of the Day -")
 	s.numeric(c, "372", ":- Single-server, simplicity-first IRC")
 	s.numeric(c, "376", ":End of MOTD")
+	if c.IdentityReadOnly {
+		s.notice(c, "This registered nickname is connected read-only; use IDENTIFY <password> or IDENTIFY <nick> <password>")
+	}
 	if s.cfg.CaptchaEnabled {
 		if err := s.issueCaptcha(c); err != nil {
 			s.sendError(c, "Captcha unavailable")

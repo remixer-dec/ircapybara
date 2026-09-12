@@ -26,7 +26,11 @@ func main() {
 		log.Fatalf("seed channels: %v", err)
 	}
 
-	srv, err := server.New(cfg, store, plugins.Builtins())
+	builtins, err := plugins.Builtins()
+	if err != nil {
+		log.Fatalf("plugins: %v", err)
+	}
+	srv, err := server.New(cfg, store, builtins)
 	if err != nil {
 		log.Fatalf("server init: %v", err)
 	}

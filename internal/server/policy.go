@@ -20,6 +20,31 @@ func (s *Server) readOnlyCommandAllowed(cmd protocol.Command) bool {
 	case "TOPIC":
 		return protocol.SingleChannelRE.MatchString(cmd.Args)
 	case "MODE":
+		if protocol.ModeBanListArgsRE.MatchString(cmd.Args) {
+			return true
+		}
+		m := protocol.ModeArgsRE.FindStringSubmatch(cmd.Args)
+		return m != nil && (m[2] == "" || (m[2] == "+b" && m[3] == ""))
+	default:
+		return false
+	}
+}
+
+// identityReadOnlyCommandAllowed is the restricted state for a connection that
+// is using a persistently registered nickname without having authenticated it.
+// The client remains a normal visible IRC participant for joins and read/query
+// operations, but cannot publish content or mutate shared state.
+func (s *Server) identityReadOnlyCommandAllowed(cmd protocol.Command) bool {
+	switch cmd.Name {
+	case "CAP", "IDENTIFY", "NICK", "PING", "PONG", "QUIT", "CAPTCHA",
+		"JOIN", "PART", "NAMES", "WHO", "WHOIS", "LIST", "MOTD", "HISTORY", "TIME", "UPTIME", "XMODE":
+		return true
+	case "TOPIC":
+		return protocol.SingleChannelRE.MatchString(cmd.Args)
+	case "MODE":
+		if protocol.ModeBanListArgsRE.MatchString(cmd.Args) {
+			return true
+		}
 		m := protocol.ModeArgsRE.FindStringSubmatch(cmd.Args)
 		return m != nil && (m[2] == "" || (m[2] == "+b" && m[3] == ""))
 	default:

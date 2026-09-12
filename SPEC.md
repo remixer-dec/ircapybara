@@ -64,7 +64,8 @@ Select/change IRC nickname.
 
 - strict ASCII nickname regexp, maximum 31 characters;
 - case-insensitively unique among live clients;
-- a persistently registered nick may only be claimed after matching `IDENTIFY` succeeds on the connection;
+- a persistently registered nick may be selected before identification, but the connection is marked identity-read-only until matching `IDENTIFY` succeeds;
+- identity-read-only users still complete IRC registration, may join/part channels, remain visible to other members, and may use read/query commands; publishing and shared-state mutation are blocked;
 - post-registration changes are broadcast to shared-channel peers;
 - nick changes do not remove IRC-op authority or channel memberships.
 
@@ -208,7 +209,7 @@ Query/change bounded channel state.
 - supported modes: `+/-o`, `+/-b`, `+/-i`, `+/-k`, `+/-l`, `+/-m`, `+/-t`, `+/-s`, `+/-H`;
 - `+o/-o`: channel membership authority;
 - `+b/-b`: durable IP/CIDR/username channel bans;
-- `+b` without a mask lists channel bans;
+- `+b` without a mask lists channel bans; classic client query form `MODE #channel b` is accepted as the same read-only ban-list request;
 - `+i`: invite-only;
 - `+k`: channel key;
 - `+l`: user limit;
@@ -292,13 +293,16 @@ Claims the currently used nick as a durable identity.
 - successful registration authenticates the current connection to that identity;
 - guard level 3 blocks new identity registration because it is a durable/user-state mutation.
 
-### `IDENTIFY <nick> <password>`
+### `IDENTIFY [<nick>] <password>`
 
 Authenticate a durable nick identity on the current connection.
 
-- may be issued before `NICK`;
-- protected `NICK` is rejected until matching identification succeeds;
-- successful authentication remains associated with the connection;
+- `IDENTIFY <password>` authenticates the current nickname;
+- `IDENTIFY <nick> <password>` remains available and may be issued before `NICK`;
+- selecting a protected nickname before identification is allowed, but the connection is identity-read-only until the matching password succeeds;
+- identity-read-only permits connection lifecycle, `JOIN`/`PART`, and read/query commands while blocking `PRIVMSG`, `NOTICE`, topic/mode mutation, kicks/invites, registration, channel creation, bans, and other shared-state mutation;
+- successful authentication clears identity-read-only state when it matches the current nick and remains associated with the connection;
+- with `IRCAPYBARA_IDENTIFY_TRUST_IP=true`, successful `REGISTER` or `IDENTIFY` remembers only that `(remote IP, identity)` pair in RAM; reconnecting to the same registered nick from that IP auto-identifies until server restart; this never authorizes other identities from the same IP;
 - deliberately smaller than SASL/services.
 
 ### `CHANADD <#channel> [PUBLIC|PRIVATE [HISTORY|NOHISTORY]] :<topic>`
@@ -394,7 +398,9 @@ Per-connection IRCapybara extension preference.
 
 ## 7. Compatibility shims
 
-`CAP LS [302]`, `CAP LIST`, `CAP REQ`, and `CAP END` are handled so modern clients that probe IRCv3 can connect. This iteration advertises no IRCv3 capability set, so syntactically valid `CAP REQ` requests receive `NAK`. Starting `CAP LS` suspends IRC registration until `CAP END`; welcome numerics must not be emitted while CAP negotiation is active. `MOTD` is implemented because regular clients commonly expect it.
+`CAP LS [302]`, `CAP LIST`, `CAP REQ`, and `CAP END` are handled so modern clients that probe IRCv3 can connect. The server advertises exactly `server-time` and `ircapybara/history` in this iteration. A valid request containing only supported capabilities receives `ACK`; any request containing an unsupported capability receives `NAK`. Starting `CAP LS` suspends IRC registration until `CAP END`; welcome numerics must not be emitted while CAP negotiation is active. `MOTD` is implemented because regular clients commonly expect it.
+
+`ircapybara/history` is intentionally an IRCapybara capability rather than a claim of complete IRCv3 `draft/chathistory` support. It tells plugins that the client accepts synthetic replay messages marked with an `ircapybara-history=1` message tag. If `server-time` is also enabled, those replay messages include a `time=` tag. Clients that do not request the capability receive plugin backlogs as ordinary IRC messages only to that client.
 
 ## 8. Protection behavior
 
@@ -412,17 +418,101 @@ Per-connection IRCapybara extension preference.
 - registered-identity password hashing with per-identity random salt;
 - private-channel durable visibility only for authenticated registered identities.
 
-## 9. Plugin entry points
+## 9. Plugin entry points and built-ins
 
-Compile-time plugins implement `pkg/pluginapi.Plugin` with hooks for:
+Compile-time plugins implement `pkg/pluginapi.Plugin`; command-owning plugins may additionally implement `pluginapi.CommandHandler`. The host API deliberately exposes only validated operations needed by plugins: RAM-only channel creation, joining an authenticated identity to a plugin-owned channel, bounded synthetic delivery, connection views, and user count. Plugins do not receive raw sockets, SQLite handles, or internal maps.
 
-- connect;
-- disconnect;
-- before command;
-- before message (may transform or deny);
-- join.
+Acceptance criteria common to all built-ins:
 
-Plugins are trusted server code, but plugin-modified message target/text is revalidated before network delivery. The built-in registry remains `internal/plugins.Builtins()`.
+- plugin configuration is bounded and regexp validated before startup succeeds;
+- IRC-originating plugin commands/messages have already passed the core regexp/UTF-8 parser, and plugin-specific syntax receives another dedicated regexp;
+- externally fetched/generated text is stripped of control characters, flattened to a single IRC-safe line, bounded, and then revalidated by the host before delivery;
+- plugin-created channels are RAM-only unless an administrator separately creates a durable core channel;
+- plugin synthetic live messages are rejected while guard level 3 is active; synthetic history replay and notices remain readable;
+- no plugin adds a non-pure-Go dependency.
+
+### MirrorPlugin
+
+Configuration: `IRCAPYBARA_MIRROR_SOURCES`, semicolon-separated entries with exact form:
+
+```text
+rss|#channel|https://feed|1h
+rss|#channel|https://feed|24h
+tg|#channel|public_channel_name|1h
+tg|#channel|public_channel_name|24h
+```
+
+Acceptance criteria:
+
+- RSS/Atom fetches accept HTTPS only, cap response bodies at 2 MiB, reject credentials/fragments and private/loopback/link-local resolved addresses, and follow at most three safe HTTPS redirects;
+- Telegram mirror fetches only `https://t.me/s/<validated-public-channel-name>` and parses `data-post`, message text/date, plus simple media fallbacks;
+- each source has one polling goroutine and polls only hourly or daily as configured;
+- first successful fetch seeds RAM state without broadcasting the existing backlog as new;
+- source IDs use RSS GUID/Atom ID when available, otherwise SHA-256 of stable feed fields; Telegram uses `<channel>/<post-id>`;
+- last ID plus the latest 100 seen IDs/posts live in RAM only;
+- new unseen posts are broadcast oldest-to-newest;
+- attached mirror channels have core IRC history disabled, so user discussion is permitted but not retained by core history;
+- joining clients receive up to 100 latest source posts only to themselves;
+- `ircapybara/history` clients receive tagged synthetic history; legacy clients receive ordinary private-to-that-client channel `PRIVMSG` replay.
+
+### BridgePlugin — Telegram provider
+
+Configuration: `IRCAPYBARA_BRIDGE_TG_BOT_TOKEN` and `IRCAPYBARA_BRIDGE_TG_MODE=channel|dm`.
+
+Plugin command:
+
+```text
+BRIDGE tg:<chat_id> <name>
+```
+
+Acceptance criteria:
+
+- command syntax is regexp constrained; `chat_id` accepts Telegram positive/negative integer IDs and `<name>` is an IRC-safe short identifier;
+- requester must be registered and authenticated to a durable IRC identity;
+- one Telegram chat ID can be owned by only one IRC identity; one generated bridge target can map to only one chat;
+- bindings are RAM-only in this iteration;
+- channel mode creates `#tg-<name>` as a private, invite-only, history-free, RAM-only channel owned by the authenticated identity and automatically joins that identity;
+- DM mode creates a virtual `tg-<name>` message target without a connected virtual socket;
+- outbound bridge traffic is intercepted before normal IRC channel/DM routing and sent through one bounded queue of 64 entries;
+- Telegram input arrives through one `getUpdates` long-poll loop; startup discards the pre-process update backlog because there is no durable binding state to route it safely;
+- injected Telegram messages use host synthetic delivery directly and therefore never pass back through the outbound hook;
+- text is mirrored as text; photo/video/sticker/animation/voice currently render as `[image]`, `[video]`, `[sticker]`, `[gif]`, `[voice]`;
+- an unmapped inbound chat auto-binds only when exactly one eligible authenticated IRC identity is online;
+- with total connected user count 2–9, Telegram receives inline selection buttons for eligible authenticated identities; callback data is bounded and validated before use;
+- at 10+ users, zero users, or otherwise ambiguous/no-eligible-user state, Telegram receives a waiting-for-IRC-initiation message rather than a large keyboard;
+- at most 100 unmatched latest chat messages are retained in RAM awaiting selection/initiation.
+
+### ChatCompletions plugin
+
+Configuration variables:
+
+```text
+IRCAPYBARA_CHAT_ENABLED=true|false
+IRCAPYBARA_CHAT_ENDPOINT=<http-or-https Chat Completions endpoint>
+IRCAPYBARA_CHAT_API_KEY=<optional bearer key>
+IRCAPYBARA_CHAT_MODEL=<model>
+IRCAPYBARA_CHAT_REASONING_EFFORT=<none|minimal|low|medium|high|xhigh|max|empty>
+IRCAPYBARA_CHAT_CHANNEL=#ai
+IRCAPYBARA_CHAT_PRIVATE=true|false
+IRCAPYBARA_CHAT_NICK=chat-ai   # fallback synthetic nick
+IRCAPYBARA_CHAT_SYSTEM_PROMPT=<optional single-line prompt>
+```
+
+Acceptance criteria:
+
+- enabling requires a valid endpoint, model, IRC channel and synthetic IRC nick;
+- plugin creates/attaches to a history-free channel; `PRIVATE=true` makes it unlisted but not invite-only;
+- user must actually be joined to the configured channel before a prompt is accepted;
+- prompt is intercepted before normal IRC fan-out/history, so no other member sees it;
+- request body contains `model`, bounded conversation `messages`, and optional `reasoning_effort`; it supplies no tool/function definitions;
+- Authorization bearer header is sent only when an API key is configured;
+- response body is capped at 2 MiB and only the first choice's text/refusal is used;
+- the response `model` field is converted to an IRC-safe synthetic responder nick; configured `IRCAPYBARA_CHAT_NICK` is used only as fallback;
+- model output is converted to bounded single-line IRC-safe chunks and delivered only to the originating connection;
+- `AIRESET` with no arguments resets only the requesting user's context; exact AI-channel messages `!reset` and `/reset` are aliases; reset increments a per-session epoch so an already in-flight stale response is discarded instead of repopulating cleared context;
+- conversation state is keyed by authenticated identity when present, otherwise by connection ID; unauthenticated session state is removed on disconnect;
+- maximum retained context is 24 user/assistant messages; one request per user and four global requests may be in flight;
+- HTTP work occurs outside the IRC connection read loop.
 
 ## 10. Future-awareness, not current behavior
 

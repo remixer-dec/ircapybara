@@ -57,7 +57,7 @@ JOIN #general
 PRIVMSG #general :hello
 ```
 
-For compatibility with clients that omit the trailing-parameter colon when the real name is one word, `USER alice 0 * Alice` is also accepted. The colon remains required when the real name contains spaces. `CAP LS` suspends registration until `CAP END`, as expected by modern IRC clients.
+For compatibility with clients that omit the trailing-parameter colon when the real name is one word, `USER alice 0 * Alice` is also accepted. The colon remains required when the real name contains spaces. `CAP LS` suspends registration until `CAP END`, as expected by modern IRC clients. The server advertises `server-time` and the IRCapybara-specific `ircapybara/history` capability.
 
 If captcha is enabled, registration produces a `NOTICE` such as:
 
@@ -77,13 +77,21 @@ Protect the current nickname:
 REGISTER a-long-password
 ```
 
-Use it on a later connection:
+Use it on a later connection. A registered nickname may connect before identification, but the connection remains identity-read-only until the password is accepted:
+
+```text
+NICK alice
+USER alice 0 * :Alice
+IDENTIFY a-long-password
+```
+
+The explicit form remains available:
 
 ```text
 IDENTIFY alice a-long-password
-NICK alice
-USER alice 0 * :Alice
 ```
+
+While identity-read-only, the client can join/part and use read/query commands (`LIST`, `NAMES`, `WHO`, `WHOIS`, `TOPIC #channel`, `MODE #channel`, `MODE #channel b`, history/time/uptime), so it remains visible in rooms. Publishing messages and shared-state mutations are blocked until `IDENTIFY` succeeds.
 
 ## Channels
 
@@ -179,11 +187,15 @@ Environment variables include:
 - `IRCAPYBARA_SERVER_PASSWORD` — optional shared IRC `PASS` secret;
 - `IRCAPYBARA_OPER_NAME` / `IRCAPYBARA_OPER_PASSWORD`;
 - `IRCAPYBARA_CAPTCHA_ENABLED` — default `false`;
+- `IRCAPYBARA_IDENTIFY_TRUST_IP` — default `false`; when enabled, a successful `REGISTER`/`IDENTIFY` remembers the `(IP, identity)` pair in RAM and automatically restores that same identity from that IP until restart;
 - `IRCAPYBARA_INITIAL_CHANNELS` — e.g. `#general|General discussion;#dev|Development`; seeded channels are public/history-enabled;
 - `IRCAPYBARA_GUARD_LEVEL` — `0`, `1`, `2`, or `3`;
 - `IRCAPYBARA_GUARD_ALLOWED_IPS` / `IRCAPYBARA_GUARD_ALLOWED_USERS` — startup guard allowlists;
 - `IRCAPYBARA_MAX_CLIENTS`, `IRCAPYBARA_MAX_PER_IP`;
-- `IRCAPYBARA_RATE_PER_SECOND`, `IRCAPYBARA_RATE_BURST`.
+- `IRCAPYBARA_RATE_PER_SECOND`, `IRCAPYBARA_RATE_BURST`;
+- `IRCAPYBARA_MIRROR_SOURCES` — optional MirrorPlugin source list;
+- `IRCAPYBARA_BRIDGE_TG_BOT_TOKEN` / `IRCAPYBARA_BRIDGE_TG_MODE` — optional Telegram BridgePlugin;
+- `IRCAPYBARA_CHAT_ENABLED`, `IRCAPYBARA_CHAT_ENDPOINT`, `IRCAPYBARA_CHAT_API_KEY`, `IRCAPYBARA_CHAT_MODEL`, `IRCAPYBARA_CHAT_REASONING_EFFORT`, `IRCAPYBARA_CHAT_CHANNEL`, `IRCAPYBARA_CHAT_PRIVATE`, `IRCAPYBARA_CHAT_NICK`, `IRCAPYBARA_CHAT_SYSTEM_PROMPT` — optional ChatCompletions plugin.
 
 Configuration strings are bounded and validated. Database/TLS paths must be safe absolute paths or safe `./relative` paths; parent traversal is rejected.
 
@@ -206,7 +218,91 @@ SQLite is loaded at startup. Ordinary messages/presence never write to disk. Dur
 
 ## Plugin model
 
-Implement `pluginapi.Plugin`, link the plugin package into the build, and return an instance from `internal/plugins.Builtins()`. This keeps the production binary static and distroless-friendly while preserving extension points for future server-side bots/bridges.
+Plugins are linked at compile time and configured through environment variables. They use a narrow `pluginapi.Host` surface rather than direct socket/database access. Plugin-created channels are RAM-only; plugins cannot silently persist arbitrary state in SQLite. Live plugin messages also respect guard level 3 read-only mode.
+
+### MirrorPlugin
+
+`MirrorPlugin` supports two sources: RSS/Atom over HTTPS and Telegram public-channel web previews (`https://t.me/s/<channel>`). Sources are configured in one semicolon-separated variable:
+
+```sh
+IRCAPYBARA_MIRROR_SOURCES='rss|#rss-news|https://example.com/feed.xml|1h;tg|#rss-telegram|telegram|24h'
+```
+
+Each entry is:
+
+```text
+rss|#channel|https://feed-url|<1h-or-24h>
+```
+
+or, concretely, one interval token at the end:
+
+```text
+rss|#rss-news|https://example.com/feed.xml|1h
+tg|#rss-telegram|telegram|24h
+```
+
+The actual parser accepts exactly `kind|#channel|source|1h` or `kind|#channel|source|24h`; entries are separated by `;`. Mirror channels are forced history-free in the IRC core, so normal discussion remains possible but discussion messages are not retained. The plugin itself keeps at most 100 latest source posts in RAM.
+
+On initial fetch the existing source backlog is learned but not broadcast as new. Later unseen IDs/hashes are broadcast. On `JOIN`, the latest source posts are sent only to that joining client. A client that negotiated:
+
+```text
+CAP REQ :server-time ircapybara/history
+```
+
+gets tagged synthetic history (`ircapybara-history=1`, plus `time=` when `server-time` was requested). A legacy client gets ordinary `PRIVMSG` replay only to that client.
+
+RSS URLs must be HTTPS and the fetcher rejects private/loopback/link-local destinations to avoid turning feed configuration into an SSRF path. Telegram mirror configuration accepts only the public channel username and constructs the `/s/` URL itself.
+
+### BridgePlugin / Telegram
+
+Enable with:
+
+```sh
+IRCAPYBARA_BRIDGE_TG_BOT_TOKEN='123456789:...'
+IRCAPYBARA_BRIDGE_TG_MODE='channel'   # or dm
+```
+
+Bridge ownership requires an authenticated registered IRC identity. Create a binding with the raw IRC command:
+
+```text
+BRIDGE tg:<chat_id> <name>
+```
+
+In clients that do not define `/bridge` themselves, use the client's raw-command form, commonly:
+
+```text
+/quote BRIDGE tg:-1001234567890 family
+```
+
+`channel` mode creates a RAM-only private invite-only channel such as `#tg-family`, automatically joins the owning identity, and suppresses IRC history. `dm` mode exposes a virtual sender/target named `tg-family`. One Telegram `chat_id` can belong to only one IRC identity, and bridge mappings are intentionally RAM-only in this iteration.
+
+The bot uses Telegram Bot API long polling. Outgoing IRC messages go through one bounded queue; incoming Telegram messages are injected directly through the host API rather than re-entering the outgoing IRC hook, preventing bridge loops. Text is mirrored directly. Images, video, stickers, GIF/animation, and voice are represented as `[image]`, `[video]`, `[sticker]`, `[gif]`, and `[voice]` for now.
+
+For an inbound Telegram dialog with no mapping: one eligible IRC identity is selected automatically; with 2–9 connected users the bot sends inline buttons for currently authenticated identities; with 10 or more connected users (and any other ambiguous/no-user case) it says it is waiting for IRC-side dialog initiation. Callback selection claims the chat for exactly one identity. At most 100 unmatched latest messages are retained in RAM while waiting.
+
+### ChatCompletions
+
+Enable an OpenAI-Chat-Completions-compatible endpoint with:
+
+```sh
+IRCAPYBARA_CHAT_ENABLED=true
+IRCAPYBARA_CHAT_ENDPOINT='https://api.openai.com/v1/chat/completions'
+IRCAPYBARA_CHAT_API_KEY='...'
+IRCAPYBARA_CHAT_MODEL='your-model'
+IRCAPYBARA_CHAT_REASONING_EFFORT='low'
+IRCAPYBARA_CHAT_CHANNEL='#ai'
+IRCAPYBARA_CHAT_PRIVATE=false
+IRCAPYBARA_CHAT_NICK='chat-ai'
+IRCAPYBARA_CHAT_SYSTEM_PROMPT='You are a concise IRC assistant.'
+```
+
+The endpoint receives only `model`, `messages`, and optional `reasoning_effort`; no tools/functions are supplied. The API key may be empty for a compatible endpoint that does not require bearer auth. `IRCAPYBARA_CHAT_PRIVATE=true` makes the channel unlisted, but it remains joinable by users who know its name.
+
+All conversations are private per user even when several people are members of the same `#ai` channel: user prompts are intercepted before IRC broadcast/history and model replies are delivered only to the requesting connection. Authenticated identities keep their conversation context across reconnects for the lifetime of the server process; unregistered sessions are discarded at disconnect. Context is bounded to 24 messages, with one in-flight request per user and four requests globally.
+
+Reset only your own AI context with `AIRESET` (commonly `/quote AIRESET`), or by sending the exact message `!reset`/`/reset` to the AI channel. If a request is already in flight, reset invalidates it and its eventual answer is discarded. The synthetic responder nick is derived from the Chat Completions response `model` field after conversion to an IRC-safe nickname; `IRCAPYBARA_CHAT_NICK` is now the fallback when the response omits or returns an unusable model name.
+
+To add another compile-time plugin, implement `pluginapi.Plugin` (and optionally `pluginapi.CommandHandler`) and register it in `internal/plugins.Builtins()`.
 
 ## Prototype limitations
 

@@ -31,6 +31,7 @@ type Config struct {
 	OperName          string
 	OperPassword      string
 	CaptchaEnabled    bool
+	IdentifyTrustIP   bool
 	GuardLevel        int
 	GuardAllowedIPs   []string
 	GuardAllowedUsers []string
@@ -130,6 +131,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.CaptchaEnabled, err = boolEnv("IRCAPYBARA_CAPTCHA_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.IdentifyTrustIP, err = boolEnv("IRCAPYBARA_IDENTIFY_TRUST_IP", false); err != nil {
 		return Config{}, err
 	}
 	if cfg.GuardLevel, err = intEnv("IRCAPYBARA_GUARD_LEVEL", 0, 0, 3); err != nil {
