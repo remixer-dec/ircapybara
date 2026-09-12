@@ -10,6 +10,7 @@ type Credential struct {
 	NickDisplay string
 	Salt        []byte
 	Hash        []byte
+	CreatedAt   time.Time
 }
 
 type Ban struct {
@@ -32,14 +33,33 @@ type Membership struct {
 	Op bool
 }
 
+type HistoryMessage struct {
+	At       time.Time
+	Nick     string
+	Username string
+	Host     string
+	Text     string
+	Notice   bool
+}
+
 type Channel struct {
-	Name        string
-	Norm        string
-	Topic       string
-	Modes       ChannelModes
-	Members     map[*Client]*Membership
-	Invited     map[*Client]bool
-	ChannelBans []Ban
+	Name           string
+	Norm           string
+	Topic          string
+	Private        bool
+	HistoryEnabled bool
+	CreatorNorm    string
+	Modes          ChannelModes
+	Members        map[*Client]*Membership
+	Invited        map[*Client]bool
+	ChannelBans    []Ban
+
+	// Participants stores durable registered identities that have previously
+	// joined this channel. SessionParticipants provides the same visibility for
+	// unregistered users only for the lifetime of their current connection.
+	Participants        map[string]struct{}
+	SessionParticipants map[*Client]struct{}
+	History             []HistoryMessage
 }
 
 type CaptchaState struct {
@@ -55,11 +75,12 @@ type Client struct {
 	Connected time.Time
 	WriteMu   sync.Mutex
 
-	Nick       string
-	Username   string
-	Realname   string
-	Registered bool
-	IsOper     bool
+	Nick           string
+	Username       string
+	Realname       string
+	Registered     bool
+	CapNegotiating bool
+	IsOper         bool
 
 	ServerPassOK       bool
 	IdentityAuthedNick string

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,8 +13,10 @@ import (
 )
 
 type SeedChannel struct {
-	Name  string
-	Topic string
+	Name           string
+	Topic          string
+	Private        bool
+	HistoryEnabled bool
 }
 
 type Config struct {
@@ -41,7 +44,7 @@ type Config struct {
 var (
 	reListen     = regexp.MustCompile(`^(?:\[[0-9A-Fa-f:]+\]|[0-9A-Za-z._-]*):[0-9]{1,5}$`)
 	reServerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,126}$`)
-	rePath       = regexp.MustCompile(`^/[A-Za-z0-9_./-]{1,240}$`)
+	rePath       = regexp.MustCompile(`^(?:/|\./)[A-Za-z0-9_./-]{1,240}$`)
 	reSecret     = regexp.MustCompile(`^[\x21-\x7e]{0,128}$`)
 	reOperName   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,31}$`)
 	reChannels   = regexp.MustCompile(`^(?:#[A-Za-z0-9_-]{1,48}\|[^;\r\n]{0,180})(?:;#[A-Za-z0-9_-]{1,48}\|[^;\r\n]{0,180})*$`)
@@ -89,13 +92,32 @@ func floatEnv(key string, def float64, min, max float64) (float64, error) {
 	return n, nil
 }
 
+func safePath(v string) bool {
+	if !rePath.MatchString(v) {
+		return false
+	}
+	clean := filepath.Clean(v)
+	if strings.Contains(v, "//") || strings.Contains(v, `\\`) {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(v), "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	if strings.HasPrefix(v, "./") {
+		return clean != "." && !strings.HasPrefix(clean, "..")
+	}
+	return filepath.IsAbs(v)
+}
+
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:     getenv("IRCAPYBARA_LISTEN_ADDR", ":6697"),
 		ServerName:     getenv("IRCAPYBARA_SERVER_NAME", "ircapybara.local"),
-		DatabasePath:   getenv("IRCAPYBARA_DB_PATH", "/data/ircapybara.db"),
-		TLSCertFile:    getenv("IRCAPYBARA_TLS_CERT_FILE", "/data/tls/server.crt"),
-		TLSKeyFile:     getenv("IRCAPYBARA_TLS_KEY_FILE", "/data/tls/server.key"),
+		DatabasePath:   getenv("IRCAPYBARA_DB_PATH", "./data/ircapybara.db"),
+		TLSCertFile:    getenv("IRCAPYBARA_TLS_CERT_FILE", "./data/tls/server.crt"),
+		TLSKeyFile:     getenv("IRCAPYBARA_TLS_KEY_FILE", "./data/tls/server.key"),
 		ServerPassword: getenv("IRCAPYBARA_SERVER_PASSWORD", ""),
 		OperName:       getenv("IRCAPYBARA_OPER_NAME", "admin"),
 		OperPassword:   getenv("IRCAPYBARA_OPER_PASSWORD", "change-me-now"),
@@ -110,7 +132,7 @@ func Load() (Config, error) {
 	if cfg.CaptchaEnabled, err = boolEnv("IRCAPYBARA_CAPTCHA_ENABLED", false); err != nil {
 		return Config{}, err
 	}
-	if cfg.GuardLevel, err = intEnv("IRCAPYBARA_GUARD_LEVEL", 0, 0, 2); err != nil {
+	if cfg.GuardLevel, err = intEnv("IRCAPYBARA_GUARD_LEVEL", 0, 0, 3); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaxClients, err = intEnv("IRCAPYBARA_MAX_CLIENTS", 256, 1, 10000); err != nil {
@@ -132,8 +154,8 @@ func Load() (Config, error) {
 	if !reServerName.MatchString(cfg.ServerName) {
 		return Config{}, errors.New("invalid IRCAPYBARA_SERVER_NAME")
 	}
-	if !rePath.MatchString(cfg.DatabasePath) || !rePath.MatchString(cfg.TLSCertFile) || !rePath.MatchString(cfg.TLSKeyFile) {
-		return Config{}, errors.New("database and TLS paths must be absolute safe paths")
+	if !safePath(cfg.DatabasePath) || !safePath(cfg.TLSCertFile) || !safePath(cfg.TLSKeyFile) {
+		return Config{}, errors.New("database and TLS paths must be safe absolute paths or safe ./relative paths")
 	}
 	if !reSecret.MatchString(cfg.ServerPassword) || !reOperName.MatchString(cfg.OperName) || !reSecret.MatchString(cfg.OperPassword) || len(cfg.OperPassword) < 8 {
 		return Config{}, errors.New("invalid server/operator credential configuration")
@@ -148,7 +170,7 @@ func Load() (Config, error) {
 		if len(parts) != 2 || !reConfigText.MatchString(parts[1]) {
 			return Config{}, errors.New("invalid channel topic")
 		}
-		cfg.InitialChannels = append(cfg.InitialChannels, SeedChannel{Name: parts[0], Topic: parts[1]})
+		cfg.InitialChannels = append(cfg.InitialChannels, SeedChannel{Name: parts[0], Topic: parts[1], HistoryEnabled: true})
 	}
 
 	if raw := getenv("IRCAPYBARA_GUARD_ALLOWED_IPS", ""); raw != "" {
@@ -172,8 +194,11 @@ func Load() (Config, error) {
 		}
 		cfg.GuardAllowedUsers = strings.Split(raw, ",")
 	}
-	if cfg.GuardLevel > 0 && len(cfg.GuardAllowedIPs) == 0 && len(cfg.GuardAllowedUsers) == 0 {
-		return Config{}, errors.New("startup guard requires an explicit allowlist; runtime GUARD snapshots current clients")
+	if cfg.GuardLevel == 1 && len(cfg.GuardAllowedIPs) == 0 && len(cfg.GuardAllowedUsers) == 0 {
+		return Config{}, errors.New("startup guard level 1 requires an explicit IP and/or username allowlist")
+	}
+	if cfg.GuardLevel >= 2 && len(cfg.GuardAllowedIPs) == 0 {
+		return Config{}, errors.New("startup guard level 2/3 requires an explicit IP allowlist")
 	}
 	return cfg, nil
 }

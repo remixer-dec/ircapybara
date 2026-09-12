@@ -1,305 +1,420 @@
-# IRCapybara v0.1 prototype specification
+# IRCapybara v0.2 prototype specification
 
 ## 1. Scope
 
-IRCapybara is a single-server IRC service for a controlled environment, not a general-purpose IRC daemon and not an IRC network implementation. The first version prioritizes a small attack surface, deterministic behavior, bounded inputs, conventional IRC client compatibility on the common path, and a codebase that can later carry IRCapybara-specific extensions.
+IRCapybara is a small, single-server IRC service built for a controlled use case. It is not intended to be a general-purpose IRC daemon or an IRC network implementation. The design prioritizes deterministic behavior, strict input validation, a small attack surface, ordinary IRC-client compatibility on the common path, low storage write volume, and explicit room for IRCapybara-specific extensions later.
 
-Out of scope for v0.1: server linking, SASL, services/NickServ/ChanServ, account federation, history, file transfer, media/voice, IRC `+v` voice status, WebSockets, metrics, structured logging, HTTP APIs, arbitrary user-created channels, CTCP parsing, and dynamic shared-object plugins.
+Out of scope for this iteration: server linking, SASL, NickServ/ChanServ-style services, account federation, IRC `+v` voice status, voice calls, WebSockets, metrics, structured logging, HTTP APIs, arbitrary implicit channel creation, CTCP interpretation, file transfer, E2EE, dynamic shared-object plugins, and persistent chat-history storage.
 
 ## 2. Design rules
 
 1. **Single server.** No server-to-server protocol or distributed state.
-2. **Strict input boundary.** Every client line must be valid UTF-8, <=510 bytes excluding CRLF, match the command envelope regexp, and then match a command-specific regexp. Message/topic/realname text is additionally checked against an allowlist regexp that excludes control characters.
-3. **ASCII identifiers, UTF-8 text.** Nicknames, usernames, channel names, modes, keys, passwords, and command tokens use tightly bounded ASCII forms. Message bodies, topics, kick/quit reasons, and realnames accept printable UTF-8. ASCII clients therefore work naturally as an UTF-8 subset. No other encoding is supported.
-4. **No implicit channel creation.** Channels come from startup seed configuration or `CHANADD` by an IRC operator.
-5. **RAM-first hot path.** Connections, memberships, modes, invites, flood state, captcha state, guard state, and chat traffic live in RAM. SQLite is read at startup and written only for durable mutations.
-6. **SQLite persistence.** `github.com/glebarez/go-sqlite` is the only direct non-standard-library dependency. `database/sql` is used directly; no ORM and no CGO.
-7. **TLS-first.** TLS is enabled by default. A self-signed Ed25519 certificate may be generated automatically. IRCapybara does not require client certificate verification.
-8. **Compile-time plugins.** Plugins implement `pkg/pluginapi.Plugin` and are linked into the Go binary through the compile-time registry. No runtime `.so` loading is required.
-9. **Bounded behavior.** One channel/target per relevant command and one channel-mode mutation per `MODE` invocation.
+2. **Strict regexp input boundary.** Every client line must be valid UTF-8, at most 510 bytes excluding CRLF, match the command-envelope regexp, and then match a command-specific regexp. Free text is additionally checked against an allowlist regexp that rejects IRC/terminal control characters.
+3. **ASCII identifiers, UTF-8 text.** Nicknames, usernames, channel names, modes, passwords, keys, command tokens, IP/CIDR values, and similar protocol identifiers use bounded ASCII forms. Messages/topics/reasons/realnames accept printable UTF-8. ASCII is therefore supported as a UTF-8 subset. No other text encoding is supported.
+4. **No implicit channel creation.** An unknown `JOIN` never creates a channel. Channels are seeded from configuration or created by an IRC operator using `CHANADD`.
+5. **RAM-first state.** Connections, memberships, invites, rate-limit state, captcha state, guard state, mode state, and message history live in memory.
+6. **On-demand persistence only.** SQLite writes occur only for durable identity registration, channel catalog/policy/topic changes, durable private-channel participation, and bans. Normal chat does not write to SQLite.
+7. **SQLite without CGO/ORM.** `github.com/glebarez/go-sqlite` is the sole direct non-standard-library dependency and is accessed through `database/sql`.
+8. **TLS-first.** TLS is enabled by default. The server may generate and use a self-signed RSA-2048 certificate for legacy IRC-client compatibility. Client certificates are not required or verified. The TLS endpoint accepts TLS 1.0 through TLS 1.3; TLS 1.0/1.1 and RSA key-exchange suites exist strictly for legacy IRC-client compatibility.
+9. **Compile-time Go plugins.** Plugins implement `pkg/pluginapi.Plugin` and are linked into the binary. Runtime `.so` loading is deliberately excluded.
+10. **Bounded protocol behavior.** One target/channel per relevant command, one mode change per `MODE`, channel history capped at 100 messages, and bounded server/client/channel counts.
+11. **Private-channel identity is zero-trust.** An unregistered nickname is not a durable identity. A private-channel participant is remembered across reconnects only when the participant is authenticated to a registered nick. Unregistered participation is remembered only for that live TCP session.
 
-## 3. Persistent data
+## 3. Filesystem and deployment
+
+Non-container defaults use `./data`:
+
+- database: `./data/ircapybara.db`;
+- generated/default TLS certificate: `./data/tls/server.crt`;
+- generated/default TLS key: `./data/tls/server.key`.
+
+Environment variables may override these with either a safe absolute path or a safe `./relative` path. Parent traversal (`..`) is rejected.
+
+Docker Compose explicitly overrides the paths to `/data/...` and mounts `/data` as a writable volume. The production image is a multi-stage build whose runtime stage is exactly `gcr.io/distroless/static-debian12:nonroot`. Debug uses the Go 1.27 Debian toolchain image.
+
+## 4. Persistent data
 
 SQLite stores only:
 
-- registered nick identity: normalized nick, display nick, random salt, password-derived hash;
-- predefined channels and topics;
+- registered nick identity: normalized nick, display nick, random salt, password-derived hash, registration timestamp;
+- channel catalog: name, topic, public/private policy, history-enabled policy, creator identity marker;
+- registered identities that have previously participated in private channels;
 - server/channel bans.
 
-Registered-nick passwords use PBKDF2-HMAC-SHA-256 with a random 128-bit salt and 210,000 iterations. Plaintext identity passwords are never stored. Operator/server passwords supplied through environment configuration are converted to in-memory salted hashes at startup and are not written to the database.
+Message history is deliberately **not persisted**. The server keeps at most 100 recent messages per history-enabled channel in RAM and loses them on restart.
 
-A future hardening release may replace PBKDF2 with a memory-hard KDF such as Argon2id if the dependency policy is relaxed.
+Registered-nick passwords use PBKDF2-HMAC-SHA-256 with a random 128-bit salt and 210,000 iterations. Plaintext identity passwords are never persisted. Operator/server passwords supplied via environment are converted to in-memory salted hashes at startup and then removed from the live config copy.
 
-## 4. IRC command acceptance criteria
+## 5. IRC command acceptance criteria
 
 ### `PASS <password>`
 
-Purpose: optional shared server-entry password, not registered-nick identity authentication.
+Optional shared server-entry password, not registered-nick authentication.
 
-Acceptance criteria:
 - accepted only before IRC registration;
-- argument is 1..128 printable non-space ASCII bytes;
-- when no server password is configured, a valid `PASS` is harmless;
-- when configured, registration cannot complete until `PASS` verifies;
-- incorrect password returns numeric `464` and may be retried;
-- password is never logged or persisted.
+- argument matches the bounded printable ASCII password regexp;
+- when no shared password is configured, a syntactically valid `PASS` is harmless;
+- when configured, IRC registration cannot complete until it verifies;
+- incorrect password returns `464` and may be retried;
+- plaintext is never logged or persisted.
 
 ### `NICK <nickname>`
 
-Purpose: select/change IRC nickname.
+Select/change IRC nickname.
 
-Acceptance criteria:
-- nickname matches the strict ASCII nickname regexp and is <=31 characters;
-- nickname is case-insensitively unique among connected clients;
-- a nick present in the registered-identity table cannot be selected unless `IDENTIFY` for that nick succeeded on the same connection;
-- changing nick after registration broadcasts `NICK` to users sharing a channel;
-- changing nick does not change IRC operator status or channel membership.
+- strict ASCII nickname regexp, maximum 31 characters;
+- case-insensitively unique among live clients;
+- a persistently registered nick may only be claimed after matching `IDENTIFY` succeeds on the connection;
+- post-registration changes are broadcast to shared-channel peers;
+- nick changes do not remove IRC-op authority or channel memberships.
 
-### `USER <username> <mode> * :<realname>`
+### `USER <username> <mode> * [:]<realname>`
 
-Purpose: complete basic IRC registration metadata.
+Complete IRC registration metadata.
 
-Acceptance criteria:
 - accepted only before registration;
 - username is strict ASCII, 1..32 characters;
-- mode is decimal and ignored in v0.1;
-- realname is printable UTF-8, <=80 code points;
-- server username bans and guard-mode username rules are checked when `USER` is received;
-- registration completes only when valid `NICK`, `USER`, and optional server `PASS` requirements are satisfied.
+- mode is decimal and ignored;
+- realname is printable UTF-8, maximum 80 code points;
+- `:` is required when the realname contains spaces and optional for a single-token realname, matching common IRC client behavior;
+- server username bans and guard identity rules are applied;
+- registration completes only after valid `NICK`, `USER`, and optional `PASS` requirements, and after `CAP END` when CAP negotiation was started.
 
 ### `PING [:]<token>` / `PONG [:]<token>`
 
-Purpose: basic connection liveness interoperability.
+Basic liveness interoperability.
 
-Acceptance criteria:
 - token is bounded safe ASCII;
-- valid `PING` gets a server `PONG` carrying the same token;
-- valid `PONG` is accepted and otherwise ignored in v0.1;
-- no autonomous idle-ping scheduler is required in this prototype.
+- `PING` gets `PONG` with the same token;
+- valid `PONG` is accepted and otherwise ignored in this iteration.
 
 ### `QUIT [:<reason>]`
 
-Purpose: disconnect cleanly.
+Clean disconnect.
 
-Acceptance criteria:
-- optional reason is printable UTF-8, <=160 code points;
-- connection closes and shared-channel peers receive one `QUIT` notification;
-- all RAM membership/invite state for the connection is removed.
+- optional reason is printable UTF-8, maximum 160 code points;
+- connection closes;
+- shared-channel peers receive one `QUIT` notification;
+- all per-connection memberships, invites, and session-only private-channel participation are removed.
 
 ### `JOIN <#channel> [key]`
 
-Purpose: join a predefined channel.
+Join an existing channel.
 
-Acceptance criteria:
 - exactly one channel per command;
-- unknown channel is not created and returns a server `NOTICE` saying the channel does not exist;
-- channel bans, invite-only mode, key, and limit are checked;
-- successful join broadcasts `JOIN`, returns topic state and `NAMES`;
-- successful join also emits a small IRCapybara extension-awareness `NOTICE`;
-- IRC operators may bypass invite-only/key/limit, but not server/channel bans;
-- no IRC `+v` voice status exists.
+- unknown channel is not created and produces a server `NOTICE` saying it does not exist;
+- channel bans, invite-only state, key, and user limit are checked;
+- private channels created as `PRIVATE` are invite-only by default;
+- a successful join broadcasts `JOIN`, then returns topic state and `NAMES`;
+- successful participation is remembered in RAM for this connection;
+- if the client is authenticated to a registered nick, first participation is persisted once for private-channel listing visibility across reconnects;
+- IRC operators may bypass invite-only/key/limit but not bans;
+- no IRC `+v` voice mode exists.
 
 ### `PART <#channel> [:<reason>]`
 
-Purpose: leave a channel without disconnecting.
+Leave a channel without disconnecting.
 
-Acceptance criteria:
 - client must currently be a member;
-- optional reason is printable UTF-8, <=160 code points;
-- `PART` is broadcast to all members including the leaving client;
-- only RAM membership state changes.
+- optional reason is printable UTF-8, maximum 160 code points;
+- `PART` is broadcast to members including the leaving client;
+- prior-participation visibility remains for the session and, for authenticated registered identities, across reconnects.
 
 ### `PRIVMSG <target> :<text>`
 
-Purpose: normal user/channel conversation.
+Normal conversation.
 
-Acceptance criteria:
-- target is exactly one valid nick or predefined channel;
-- text is 1..400 printable UTF-8 code points and contains no IRC/terminal control characters;
+- one strict nick or existing channel target;
+- text is 1..400 printable UTF-8 code points and contains no IRC/terminal controls;
 - channel sender must be a member;
-- moderated channels allow only channel operators or IRC operators to send;
-- direct messages require a connected registered target nick;
-- sender does not receive a server echo in v0.1;
-- plugin `BeforeMessage` hooks run before delivery, and plugin output is revalidated before use.
+- moderated channels allow only channel operators or IRC operators;
+- direct messages require a connected registered target;
+- plugin `BeforeMessage` hooks run before delivery and transformed output is revalidated;
+- for a history-enabled channel, the final validated channel message is appended to its RAM history;
+- no history write reaches SQLite;
+- guard level 3 blocks `PRIVMSG`.
 
 ### `NOTICE <target> :<text>`
 
-Purpose: informational message with the IRC convention that it should not provoke automatic error/reply loops.
+Informational message using IRC's no-auto-error/no-auto-reply convention.
 
-Acceptance criteria:
-- same target/text bounds as `PRIVMSG`;
+- same input bounds as `PRIVMSG`;
 - delivered similarly to `PRIVMSG`;
-- target/member/mode failures are silently dropped rather than answered with IRC errors;
-- malformed `NOTICE` arguments are ignored after the strict envelope boundary.
+- ordinary target/member/mode failures do not generate an IRC error response;
+- history-enabled channels retain delivered channel notices in RAM;
+- guard level 3 silently drops user `NOTICE` rather than generating a response loop.
 
 ### `TOPIC <#channel> [:<topic>]`
 
-Purpose: inspect or change channel topic metadata.
+Inspect/change channel topic metadata.
 
-Acceptance criteria:
-- without `:<topic>`, returns current topic or “no topic” numeric;
-- with `:<topic>`, topic may be set or cleared;
-- topic is printable UTF-8, <=180 code points;
-- default channel mode is `+t`, therefore only a channel operator or IRC operator may change it;
-- `MODE #channel -t` allows any channel member to change topic;
-- successful topic changes are persisted immediately because topic is durable configuration.
+- `TOPIC #channel` is a query;
+- `TOPIC #channel :text` sets or clears the topic;
+- topic is printable UTF-8, maximum 180 code points;
+- private-channel topic inspection is limited to current members or IRC operators;
+- default `+t` means channel-op or IRC-op is required to change topic;
+- `MODE #channel -t` allows a member to change topic;
+- successful topic changes are persisted;
+- guard level 3 permits topic queries but blocks topic mutation.
 
 ### `NAMES <#channel>`
 
-Purpose: list current members.
+List current members.
 
-Acceptance criteria:
-- exactly one existing channel;
-- returns `353` chunks followed by `366`;
+- exactly one channel;
+- private-channel member enumeration requires current membership or IRC-op authority;
 - channel operators are prefixed with `@`;
-- output is chunked to remain under the IRC line limit.
+- output is chunked and terminated by `366`.
 
 ### `WHO <#channel|mask>`
 
-Purpose: lightweight visible-user query.
+Lightweight user query.
 
-Acceptance criteria:
-- channel form returns members of exactly that channel;
-- mask form accepts only the bounded wildcard search regexp;
-- `*` and `?` are converted to an anchored regular expression after the mask itself has passed validation;
-- mask is matched case-insensitively against nick, username, realname, and IP string;
-- results use `352`, followed by `315`.
+- channel form returns current members;
+- private-channel form requires current membership or IRC-op authority;
+- mask form first passes a bounded regexp and only then becomes an anchored wildcard regexp;
+- `*` and `?` are supported;
+- mask matches case-insensitively against nick, username, realname, and IP string;
+- results use `352`, terminated by `315`.
 
 ### `WHOIS <nickname>`
 
-Purpose: detailed information about one connected user.
+Detailed live-user query.
 
-Acceptance criteria:
-- exactly one strict nickname;
-- returns username, IP-as-host field, realname, channel memberships, and IRC-operator marker when applicable;
+- one strict nickname;
+- returns username, IP-as-host, realname, visible channel memberships, and IRC-op marker;
+- private channel membership is shown only to the target themself, a current member of that private channel, or an IRC operator;
 - missing user returns `401`;
-- response terminates with `318`.
+- terminated by `318`.
 
 ### `LIST`
 
-Purpose: list the predefined channel catalog.
+List the channel catalog.
 
-Acceptance criteria:
-- takes no parameters in v0.1;
-- lists every configured/persisted channel, current member count, and topic;
-- unknown/empty channels still appear because channel existence is independent of membership.
+- takes no parameters;
+- public channels are always listed;
+- a private channel is listed only to IRC operators, its creator identity, a current/session participant, or an authenticated registered identity recorded as a prior participant;
+- unregistered prior participation is not trusted across reconnects;
+- listed rows include member count and topic;
+- empty channels remain part of the catalog.
 
 ### `MODE <#channel> [<mode> [parameter]]`
 
-Purpose: query/change bounded channel state.
+Query/change bounded channel state.
 
-Acceptance criteria:
-- one channel and at most one mode change per command;
-- query returns `324`;
-- mutating modes require channel-op or IRC-op authority;
-- supported modes are `+/-o`, `+/-b`, `+/-i`, `+/-k`, `+/-l`, `+/-m`, `+/-t`;
-- `+o/-o` affects channel membership authority only;
-- `+b/-b` accepts only `ip:<addr>`, `cidr:<range>`, or `user:<username>` and is durable in SQLite;
-- `+b` without a mask lists bans;
-- `+i`, `+m`, `+t`, `-i`, `-m`, `-t`, `-k`, `-l` reject unexpected parameters;
-- `+k` requires a bounded ASCII key;
-- `+l` requires a positive bounded integer;
-- `+v` is deliberately unsupported.
+- one channel and at most one mode change;
+- private-channel mode inspection requires current membership or IRC-op authority;
+- mutation requires channel-op or IRC-op authority;
+- supported modes: `+/-o`, `+/-b`, `+/-i`, `+/-k`, `+/-l`, `+/-m`, `+/-t`, `+/-s`, `+/-H`;
+- `+o/-o`: channel membership authority;
+- `+b/-b`: durable IP/CIDR/username channel bans;
+- `+b` without a mask lists channel bans;
+- `+i`: invite-only;
+- `+k`: channel key;
+- `+l`: user limit;
+- `+m`: moderated;
+- `+t`: topic restricted to channel operators;
+- `+s`: private/unlisted channel catalog policy; `-s` makes it public again; policy is persisted;
+- `+H`: enable RAM history; policy is persisted;
+- `-H`: disable history, persist the policy, and immediately discard the current RAM history buffer;
+- private-channel creation sets `+i` automatically, but changing `+s/-s` later does not implicitly change `+i`;
+- `+v` is unsupported;
+- guard level 3 permits only mode query and ban-list query (`+b` without a mask), not mutation.
 
 ### `KICK <#channel> <nick> [:<reason>]`
 
-Purpose: remove a member from a channel.
+Remove a current channel member.
 
-Acceptance criteria:
 - requester must be channel operator or IRC operator;
-- target must currently be in the channel;
-- optional reason is printable UTF-8, <=160 code points;
-- `KICK` is sent to all current members including the target before its membership is removed.
+- target must currently belong to the channel;
+- optional reason is printable UTF-8, maximum 160 code points;
+- event is sent to current members including the target;
+- guard level 3 blocks `KICK`.
 
 ### `INVITE <nick> <#channel>` — low priority
 
-Purpose: one-time admission into an invite-only channel.
+One-time admission into an invite-only/private channel.
 
-Acceptance criteria:
-- implemented but treated as low priority;
 - requester must be channel operator or IRC operator;
 - target must be connected and not already a member;
-- invite exists only in RAM and is consumed by successful `JOIN`;
-- no persistence or elaborate invite-notify semantics.
+- invite is RAM-only and consumed by successful `JOIN`;
+- invited user receives the channel name directly even though it may not be visible in `LIST` yet;
+- no persistence or IRCv3 invite-notify semantics;
+- guard level 3 blocks new invites.
 
 ### `OPER <oper-name> <password>`
 
-Purpose: attach server-wide operator authority to the current connection.
+Attach server-wide operator authority to the current connection.
 
-Acceptance criteria:
-- requester must already be a registered IRC user;
-- credentials match the configured operator identity;
-- success sets per-connection IRC-op state and emits numeric `381` plus user mode `+o` indication;
-- operator privilege survives nick changes and channel joins but disappears on disconnect;
-- operator password is never logged or persisted.
+- requester must already be an IRC-registered client;
+- credentials match configured operator credentials;
+- success sets per-connection IRC-op state, returns `381`, and emits user `+o` indication;
+- authority survives nick/channel changes but disappears on disconnect;
+- password is never logged or persisted.
 
 ### `KILL <nick> [:<reason>]`
 
-Purpose: force-disconnect another client.
+Force-disconnect another client.
 
-Acceptance criteria:
-- IRC-operator only;
-- exact connected target nick required;
+- IRC-op only;
+- exact connected target nick;
 - target receives `KILL`/`ERROR`, is removed from RAM state, and its socket is closed;
-- peers receive a resulting `QUIT`.
+- security administration remains available during guard level 3.
 
-## 5. IRCapybara custom/support commands
+### `TIME`
+
+Return server wall-clock time.
+
+- no arguments;
+- requester must be registered;
+- responds with numeric `391`;
+- timestamp is UTC RFC3339 for deterministic output.
+
+### `UPTIME`
+
+Return process uptime.
+
+- no arguments;
+- requester must be registered;
+- returns a server `NOTICE` containing elapsed time since this server process started.
+
+## 6. IRCapybara custom/support commands
 
 ### `REGISTER <password>`
 
-Claims the current nick permanently. Requires a fully registered, captcha-cleared connection. Password is 8..128 printable non-space ASCII characters. A nick can be registered only once. The derived hash/salt is persisted; plaintext is discarded.
+Claims the currently used nick as a durable identity.
+
+- fully IRC-registered and captcha-cleared connection required;
+- password is 8..128 printable non-space ASCII characters;
+- nick can be registered only once;
+- salt/hash and registration timestamp are persisted;
+- plaintext is discarded;
+- successful registration authenticates the current connection to that identity;
+- guard level 3 blocks new identity registration because it is a durable/user-state mutation.
 
 ### `IDENTIFY <nick> <password>`
 
-Authenticates a registered nick on the current connection. It may be sent before `NICK`; a protected nick is rejected by `NICK` until matching `IDENTIFY` succeeds. This is deliberately much smaller than SASL/services.
+Authenticate a durable nick identity on the current connection.
 
-### `CHANADD <#channel> :<topic>`
+- may be issued before `NICK`;
+- protected `NICK` is rejected until matching identification succeeds;
+- successful authentication remains associated with the connection;
+- deliberately smaller than SASL/services.
 
-IRC-operator only. Creates a new allowed channel and persists it. This is the only runtime channel-creation path in v0.1.
+### `CHANADD <#channel> [PUBLIC|PRIVATE [HISTORY|NOHISTORY]] :<topic>`
 
-### `GUARD <0|1|2>`
+IRC-op-only channel catalog creation.
 
-IRC-operator only. Runtime activation snapshots currently registered clients.
+Accepted examples:
+
+```text
+CHANADD #ops :Operations
+CHANADD #secret PRIVATE :Private room
+CHANADD #scratch PRIVATE NOHISTORY :Ephemeral private discussion
+CHANADD #public PUBLIC NOHISTORY :No retained history
+```
+
+Behavior:
+
+- omitted policy means `PUBLIC HISTORY`;
+- `PRIVATE` means unlisted/secret catalog behavior and starts invite-only;
+- `NOHISTORY` means no channel message buffer;
+- channel metadata is persisted;
+- implicit creation through `JOIN` remains impossible;
+- blocked by guard level 3 read-only mode.
+
+### `HISTORY <#channel> [limit]`
+
+Replay recent RAM history.
+
+- requester must be registered;
+- limit defaults to 20 and must be 1..100;
+- requester must currently be a member, unless they are an IRC operator;
+- history-free channels return a server notice saying history is disabled;
+- replay is oldest-to-newest from the selected tail of the buffer;
+- legacy clients receive ordinary IRC message lines, so no IRCv3 dependency is required;
+- timestamps are retained internally for future extended rendering but are not yet encoded into legacy replay lines;
+- history disappears on process restart.
+
+### `GUARD <0|1|2|3>`
+
+IRC-op-only emergency admission control.
 
 - `0`: off;
-- `1`: reconnect allowed when either source IP or IRC username was present in the snapshot;
-- `2`: reconnect allowed only from snapshot IPs.
+- `1`: runtime snapshot allows reconnect when either source IP or IRC username was present;
+- `2`: runtime snapshot allows reconnect only from snapshotted IPs;
+- `3`: first prunes recent untrusted sessions, then snapshots surviving IPs exactly like level 2, and finally enables read-only mode.
 
-Level 2 can reject at TCP accept time. Level 1 may provisionally accept a new IP until its `USER` username is known. Startup guard mode requires explicit environment allowlists to prevent accidental total lockout.
+Guard level 3 pruning rule:
+
+- IRC operators are retained;
+- any connection that is at least 30 minutes old is retained;
+- a younger connection is retained if it is authenticated to its current registered identity and that identity itself was registered at least 30 minutes ago;
+- remaining younger clients are disconnected **before** the allowlist snapshot is taken;
+- this means old sessions survive, and old registered identities survive even after a recent reconnect, while both new anonymous sessions and freshly-created identities are removed.
+
+Guard level 3 read-only policy:
+
+- users may connect when their IP is allowed, authenticate, query state, join/part channels, retrieve history, use `TIME`/`UPTIME`, and disconnect;
+- user content/state mutations such as `PRIVMSG`, `NOTICE`, topic changes, mode changes, `KICK`, `INVITE`, `REGISTER`, and `CHANADD` are blocked;
+- operator/security escape controls (`OPER`, `GUARD`, `KILL`, `BANADD`, `BANDEL`, `BANLIST`) remain available so the mode can be managed or disabled.
+
+Startup guard levels 2/3 require an explicit IP allowlist. Startup level 1 requires an IP and/or username allowlist.
 
 ### `BANADD <SERVER|#channel> <IP|CIDR|USER> <value>`
 ### `BANDEL <SERVER|#channel> <IP|CIDR|USER> <value>`
 ### `BANLIST <SERVER|#channel>`
 
-IRC-operator durable ban administration. Server IP/CIDR bans can reject during accept; username bans apply when `USER` is known. Adding a server ban immediately disconnects matching current clients. Channel bans are also manageable through `MODE +b/-b`.
+IRC-op durable ban administration.
+
+- server IP/CIDR bans can reject at accept time;
+- username bans are enforced once `USER` is known;
+- adding a server ban disconnects matching live clients;
+- channel bans can also be changed through `MODE +b/-b`;
+- security ban administration remains available under guard level 3.
 
 ### `CAPTCHA <challenge-id> <answer>`
 
-When captcha is enabled, every newly registered TCP connection receives one simple addition challenge. Until solved, every command except `CAPTCHA`, `PING`, `PONG`, and `QUIT` is silently ignored. The challenge is RAM-only and not intended as strong bot proof; it is a cheap friction control.
+Optional first-server-join friction control.
+
+- each newly IRC-registered connection receives a small addition problem;
+- challenge ID and answer format are regexp constrained;
+- until solved, all commands except `CAPTCHA`, `PING`, `PONG`, and `QUIT` are silently ignored;
+- challenge state is RAM-only;
+- not intended as strong bot-proofing.
 
 ### `XMODE PLAIN|EXTENDED`
 
-Per-connection extension preference. `EXTENDED` is advertised on channel join, but v0.1 remains payload-compatible/passthrough because the future rendering format is intentionally undefined. This creates a stable negotiation hook without prematurely defining markup.
+Per-connection IRCapybara extension preference.
 
-## 6. Compatibility shims
+- `PLAIN` means ordinary IRC rendering semantics;
+- `EXTENDED` signals that the client wants IRCapybara-specific richer responses where defined;
+- current rendering format remains passthrough/reserved;
+- the hook exists now so future clients can negotiate richer representations without changing ordinary-client behavior.
 
-`CAP LS [302]` / `CAP END` are accepted so modern clients that probe IRCv3 do not fail registration; v0.1 advertises no IRCv3 capability set. `MOTD` is also provided because many regular clients expect it.
+## 7. Compatibility shims
 
-## 7. Protection behavior
+`CAP LS [302]`, `CAP LIST`, `CAP REQ`, and `CAP END` are handled so modern clients that probe IRCv3 can connect. This iteration advertises no IRCv3 capability set, so syntactically valid `CAP REQ` requests receive `NAK`. Starting `CAP LS` suspends IRC registration until `CAP END`; welcome numerics must not be emitted while CAP negotiation is active. `MOTD` is implemented because regular clients commonly expect it.
 
-- maximum total clients and maximum connections per source IP;
+## 8. Protection behavior
+
+- maximum total clients;
+- maximum live connections per source IP;
 - token-bucket command rate limit per connection;
-- input line size bound before parsing;
-- strict UTF-8 and regexp parsing;
-- server IP, CIDR, and username bans;
-- channel IP, CIDR, and username bans;
-- guard levels 0/1/2;
-- optional per-connection math captcha;
-- no terminal/CTCP control bytes in relayed text.
+- line-size bound before command parsing;
+- strict UTF-8 and regexp validation;
+- TLS handshake/admission/protocol failures are logged without logging raw IRC command contents or credentials;
+- server IP/CIDR/username bans;
+- channel IP/CIDR/username bans;
+- guard levels 0/1/2/3;
+- optional math captcha;
+- no terminal/CTCP control bytes in relayed free text;
+- registered-identity password hashing with per-identity random salt;
+- private-channel durable visibility only for authenticated registered identities.
 
-## 8. Plugin entry points
+## 9. Plugin entry points
 
-Compile-time Go plugins implement `pkg/pluginapi.Plugin` with hooks for:
+Compile-time plugins implement `pkg/pluginapi.Plugin` with hooks for:
 
 - connect;
 - disconnect;
@@ -307,20 +422,20 @@ Compile-time Go plugins implement `pkg/pluginapi.Plugin` with hooks for:
 - before message (may transform or deny);
 - join.
 
-Plugins are trusted server code. Any message target/text returned by a plugin is nevertheless revalidated before network delivery. The built-in registry is `internal/plugins.Builtins()`.
+Plugins are trusted server code, but plugin-modified message target/text is revalidated before network delivery. The built-in registry remains `internal/plugins.Builtins()`.
 
-## 9. Future-awareness, not v0.1 behavior
+## 10. Future-awareness, not current behavior
 
-The architecture must not prevent later addition of:
+The architecture should not prevent later addition of:
 
-- bounded server-side history;
-- end-to-end-encryption overlay metadata;
+- persistent/IRCv3-compatible history;
+- E2EE overlay metadata;
 - file transfer;
 - negotiated extended rendering;
-- server-side bot/agent plugins;
+- server-side bots/agents as compile-time plugins;
 - bridges to other messengers;
-- images, GIFs, stickers, and voice-message blobs carried through file-transfer/extended-rendering facilities;
-- terminal-friendly binary/data transport;
-- a possible SSH overlay for transport/data transfer, explicitly not remote command execution by IRC itself.
+- images, GIFs, stickers, and voice-message blobs transported through future file-transfer/extended-rendering facilities;
+- terminal-friendly data transport;
+- a possible SSH overlay for authenticated/encrypted data transfer, explicitly not remote command execution through IRC.
 
-No v0.1 code may pretend these formats are already defined.
+No current protocol should pretend these future wire formats are already defined.

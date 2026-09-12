@@ -38,4 +38,11 @@ func TestGuardLevels(t *testing.T) {
 	if !m.GuardAllowsIdentity(ip, "nobody") {
 		t.Fatal("level 2 should allow snapshotted IP")
 	}
+	m.SetGuard(3, GuardSnapshot{IPs: []string{ip.String()}, Users: []string{"alice"}})
+	if m.GuardAllowsIdentity(other, "alice") {
+		t.Fatal("level 3 must ignore username")
+	}
+	if !m.GuardAllowsIdentity(ip, "nobody") {
+		t.Fatal("level 3 should allow snapshotted IP")
+	}
 }

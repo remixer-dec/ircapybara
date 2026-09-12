@@ -38,6 +38,7 @@ type Server struct {
 	protection     *protection.Manager
 	operCred       model.Credential
 	serverPassCred *model.Credential
+	startedAt      time.Time
 }
 
 func New(cfg config.Config, store *storage.Store, plugins []pluginapi.Plugin) (*Server, error) {
@@ -70,6 +71,7 @@ func New(cfg config.Config, store *storage.Store, plugins []pluginapi.Plugin) (*
 		identities: identities,
 		protection: protection.New(bans, cfg.GuardLevel, cfg.GuardAllowedIPs, cfg.GuardAllowedUsers),
 		operCred:   model.Credential{NickDisplay: cfg.OperName, Salt: operSalt, Hash: operHash},
+		startedAt:  time.Now(),
 	}
 	s.cfg.OperPassword = ""
 	if cfg.ServerPassword != "" {
@@ -116,6 +118,7 @@ func (s *Server) ListenAndServe() error {
 			continue
 		}
 		if !s.acceptAllowed(ip) {
+			log.Printf("connection rejected from %s by admission policy", ip.String())
 			_ = conn.Close()
 			continue
 		}
@@ -150,7 +153,7 @@ func (s *Server) acceptAllowed(ip net.IP) bool {
 	if s.protection.ServerBanned(ip, "") {
 		return false
 	}
-	if s.protection.GuardLevel() == 2 && !s.protection.GuardAllowsIP(ip) {
+	if s.protection.GuardLevel() >= 2 && !s.protection.GuardAllowsIP(ip) {
 		return false
 	}
 	s.mu.RLock()
@@ -177,6 +180,16 @@ func (s *Server) serveClient(c *model.Client) {
 		}
 	}()
 
+	if tc, ok := c.Conn.(*tls.Conn); ok {
+		_ = tc.SetDeadline(time.Now().Add(15 * time.Second))
+		if err := tc.Handshake(); err != nil {
+			reason = "TLS handshake failed"
+			log.Printf("TLS handshake failed from %s: %v", c.RemoteIP.String(), err)
+			return
+		}
+		_ = tc.SetDeadline(time.Time{})
+	}
+
 	r := bufio.NewReaderSize(c.Conn, protocol.MaxLineBytes+2)
 	for {
 		raw, err := r.ReadSlice('\n')
@@ -184,6 +197,9 @@ func (s *Server) serveClient(c *model.Client) {
 			if errors.Is(err, bufio.ErrBufferFull) {
 				s.sendError(c, "Input line too long")
 				reason = "Protocol violation"
+				log.Printf("protocol violation from %s: input line too long", c.RemoteIP.String())
+			} else if !errors.Is(err, io.EOF) {
+				log.Printf("client read error from %s: %v", c.RemoteIP.String(), err)
 			}
 			return
 		}
@@ -197,6 +213,7 @@ func (s *Server) serveClient(c *model.Client) {
 		if len(raw) == 0 || len(raw) > protocol.MaxLineBytes || !utf8.Valid(raw) {
 			s.sendError(c, "Invalid IRC input")
 			reason = "Protocol violation"
+			log.Printf("protocol violation from %s: invalid line length or UTF-8", c.RemoteIP.String())
 			return
 		}
 		if !s.consumeToken(c) {
@@ -208,6 +225,7 @@ func (s *Server) serveClient(c *model.Client) {
 		if err != nil {
 			s.sendError(c, "Invalid IRC input")
 			reason = "Protocol violation"
+			log.Printf("protocol violation from %s: invalid command envelope", c.RemoteIP.String())
 			return
 		}
 		c.LastActivity = time.Now()
@@ -218,6 +236,13 @@ func (s *Server) serveClient(c *model.Client) {
 			default:
 				continue
 			}
+		}
+
+		if s.protection.GuardLevel() == 3 && !s.readOnlyCommandAllowed(cmd) {
+			if cmd.Name != "NOTICE" {
+				s.notice(c, "Guard level 3: server is read-only")
+			}
+			continue
 		}
 
 		denied := false
@@ -341,7 +366,7 @@ func (s *Server) identity(norm string) (model.Credential, bool) {
 }
 
 func (s *Server) maybeRegister(c *model.Client) (bool, string) {
-	if c.Registered || c.Nick == "" || c.Username == "" || !c.ServerPassOK {
+	if c.Registered || c.CapNegotiating || c.Nick == "" || c.Username == "" || !c.ServerPassOK {
 		return false, ""
 	}
 	if s.protection.ServerBanned(c.RemoteIP, c.Username) {
@@ -354,7 +379,7 @@ func (s *Server) maybeRegister(c *model.Client) (bool, string) {
 	}
 	c.Registered = true
 	s.numeric(c, "001", ":Welcome to IRCapybara, "+c.Nick)
-	s.numeric(c, "005", "UTF8ONLY CHANTYPES=# PREFIX=(o)@ CHANMODES=b,k,l,imt IRCAPYBARA=1 :are supported by this server")
+	s.numeric(c, "005", "UTF8ONLY CHANTYPES=# PREFIX=(o)@ CHANMODES=b,k,l,imtsH IRCAPYBARA=1 :are supported by this server")
 	s.numeric(c, "375", ":- IRCapybara Message of the Day -")
 	s.numeric(c, "372", ":- Single-server, simplicity-first IRC")
 	s.numeric(c, "376", ":End of MOTD")
@@ -393,9 +418,10 @@ func (s *Server) removeClient(c *model.Client, reason string) {
 	}
 	delete(s.clients, c)
 	for _, ch := range s.channels {
+		delete(ch.SessionParticipants, c)
+		delete(ch.Invited, c)
 		if _, ok := ch.Members[c]; ok {
 			delete(ch.Members, c)
-			delete(ch.Invited, c)
 			for other := range ch.Members {
 				recipients[other] = struct{}{}
 			}

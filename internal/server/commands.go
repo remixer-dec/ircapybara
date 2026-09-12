@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"ircapybara/internal/model"
 	"ircapybara/internal/protection"
@@ -19,7 +20,7 @@ import (
 var (
 	pingArgsRE = regexp.MustCompile(`^:?([A-Za-z0-9._:/-]{1,128})$`)
 	quitArgsRE = regexp.MustCompile(`^:?(.{0,160})$`)
-	capArgsRE  = regexp.MustCompile(`^(?:LS(?: 302)?|END)$`)
+	capArgsRE  = regexp.MustCompile(`^(?:LS(?: 302)?|END|LIST|REQ :[A-Za-z0-9=~._/-]{1,64}(?: [A-Za-z0-9=~._/-]{1,64})*)$`)
 )
 
 func (s *Server) dispatch(c *model.Client, cmd protocol.Command) (bool, string) {
@@ -64,6 +65,12 @@ func (s *Server) dispatch(c *model.Client, cmd protocol.Command) (bool, string) 
 		return s.cmdLIST(c, cmd.Args)
 	case "MOTD":
 		return s.cmdMOTD(c, cmd.Args)
+	case "TIME":
+		return s.cmdTIME(c, cmd.Args)
+	case "UPTIME":
+		return s.cmdUPTIME(c, cmd.Args)
+	case "HISTORY":
+		return s.cmdHISTORY(c, cmd.Args)
 	case "MODE":
 		return s.cmdMODE(c, cmd.Args)
 	case "KICK":
@@ -120,8 +127,20 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 		s.badParams(c, "CAP")
 		return false, ""
 	}
-	if strings.HasPrefix(args, "LS") {
-		s.sendLine(c, ":"+s.cfg.ServerName+" CAP * LS :")
+	switch {
+	case strings.HasPrefix(args, "LS"):
+		if !c.Registered {
+			c.CapNegotiating = true
+		}
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LS :")
+	case args == "LIST":
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LIST :")
+	case strings.HasPrefix(args, "REQ :"):
+		// v0.1 advertises no capabilities, so every syntactically valid request is rejected.
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" NAK :"+strings.TrimPrefix(args, "REQ :"))
+	case args == "END":
+		c.CapNegotiating = false
+		return s.maybeRegister(c)
 	}
 	return false, ""
 }
@@ -214,11 +233,19 @@ func (s *Server) cmdUSER(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	m := protocol.UserArgsRE.FindStringSubmatch(args)
-	if m == nil || !protocol.UsernameRE.MatchString(m[1]) || !protocol.ValidText(m[2], 80) {
+	if m == nil || !protocol.UsernameRE.MatchString(m[1]) {
 		s.badParams(c, "USER")
 		return false, ""
 	}
-	c.Username, c.Realname = m[1], m[2]
+	realname := m[2]
+	if realname == "" {
+		realname = m[3]
+	}
+	if !protocol.ValidText(realname, 80) {
+		s.badParams(c, "USER")
+		return false, ""
+	}
+	c.Username, c.Realname = m[1], realname
 	if s.protection.ServerBanned(c.RemoteIP, c.Username) {
 		s.sendError(c, "Banned from server")
 		return true, "Server ban"
@@ -301,13 +328,14 @@ func (s *Server) cmdREGISTER(c *model.Client, args string) (bool, string) {
 		s.notice(c, "Registration failed")
 		return false, ""
 	}
-	if err := s.store.RegisterIdentity(c.Nick, salt, hash); err != nil {
+	createdAt, err := s.store.RegisterIdentity(c.Nick, salt, hash)
+	if err != nil {
 		log.Printf("register %s: %v", c.Nick, err)
 		s.notice(c, "Registration failed")
 		return false, ""
 	}
 	s.mu.Lock()
-	s.identities[norm] = model.Credential{NickDisplay: c.Nick, Salt: salt, Hash: hash}
+	s.identities[norm] = model.Credential{NickDisplay: c.Nick, Salt: salt, Hash: hash, CreatedAt: createdAt}
 	s.mu.Unlock()
 	c.IdentityAuthedNick = norm
 	s.notice(c, "Nickname registered; use IDENTIFY <nick> <password> before claiming it on future connections")
@@ -358,13 +386,27 @@ func (s *Server) cmdJOIN(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	ch.Members[c] = &model.Membership{}
+	ch.SessionParticipants[c] = struct{}{}
 	delete(ch.Invited, c)
+	persistParticipant := ""
+	if c.IdentityAuthedNick != "" && c.IdentityAuthedNick == protocol.Norm(c.Nick) {
+		if _, seen := ch.Participants[c.IdentityAuthedNick]; !seen {
+			ch.Participants[c.IdentityAuthedNick] = struct{}{}
+			persistParticipant = c.IdentityAuthedNick
+		}
+	}
 	recipients := make([]*model.Client, 0, len(ch.Members))
 	for member := range ch.Members {
 		recipients = append(recipients, member)
 	}
 	topic := ch.Topic
 	s.mu.Unlock()
+
+	if persistParticipant != "" {
+		if err := s.store.RecordChannelParticipation(norm, persistParticipant); err != nil {
+			log.Printf("record channel participation %s/%s: %v", norm, persistParticipant, err)
+		}
+	}
 
 	line := fmt.Sprintf(":%s JOIN %s", s.prefix(c), ch.Name)
 	for _, member := range recipients {
@@ -459,10 +501,10 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 
 	if strings.HasPrefix(event.Target, "#") {
 		norm := protocol.Norm(event.Target)
-		s.mu.RLock()
+		s.mu.Lock()
 		ch, ok := s.channels[norm]
 		if !ok {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			if !notice {
 				s.numeric(c, "403", event.Target+" :No such channel")
 			}
@@ -470,26 +512,27 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 		}
 		membership, joined := ch.Members[c]
 		if !joined {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			if !notice {
 				s.numeric(c, "404", ch.Name+" :Cannot send to channel; join first")
 			}
 			return false, ""
 		}
 		if ch.Modes.Moderated && !membership.Op && !c.IsOper {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			if !notice {
 				s.numeric(c, "404", ch.Name+" :Cannot send to channel (+m)")
 			}
 			return false, ""
 		}
+		appendChannelHistoryLocked(ch, c, event.Text, notice)
 		recipients := make([]*model.Client, 0, len(ch.Members))
 		for member := range ch.Members {
 			if member != c {
 				recipients = append(recipients, member)
 			}
 		}
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		for _, member := range recipients {
 			s.sendLine(member, line)
 		}
@@ -525,7 +568,7 @@ func (s *Server) cmdTOPIC(c *model.Client, args string) (bool, string) {
 	norm := protocol.Norm(m[1])
 	s.mu.Lock()
 	ch, ok := s.channels[norm]
-	if !ok {
+	if !ok || !s.canInspectChannelLocked(c, ch) {
 		s.mu.Unlock()
 		s.numeric(c, "403", m[1]+" :No such channel")
 		return false, ""
@@ -617,7 +660,7 @@ func (s *Server) cmdNAMES(c *model.Client, args string) (bool, string) {
 	s.mu.RLock()
 	ch := s.channels[protocol.Norm(m[1])]
 	s.mu.RUnlock()
-	if ch == nil {
+	if ch == nil || !s.canInspectChannel(c, ch) {
 		s.numeric(c, "403", m[1]+" :No such channel")
 		return false, ""
 	}
@@ -645,7 +688,7 @@ func (s *Server) cmdWHO(c *model.Client, args string) (bool, string) {
 	if strings.HasPrefix(mask, "#") {
 		s.mu.RLock()
 		ch := s.channels[protocol.Norm(mask)]
-		if ch == nil {
+		if ch == nil || !s.canInspectChannelLocked(c, ch) {
 			s.mu.RUnlock()
 			s.numeric(c, "315", mask+" :End of WHO list")
 			return false, ""
@@ -713,7 +756,7 @@ func (s *Server) cmdWHOIS(c *model.Client, args string) (bool, string) {
 	s.mu.RLock()
 	var channels []string
 	for _, ch := range s.channels {
-		if ms, ok := ch.Members[target]; ok {
+		if ms, ok := ch.Members[target]; ok && (c == target || s.canInspectChannelLocked(c, ch)) {
 			name := ch.Name
 			if ms.Op {
 				name = "@" + name
@@ -756,12 +799,15 @@ func (s *Server) cmdLIST(c *model.Client, args string) (bool, string) {
 	if !s.requireRegistered(c) {
 		return false, ""
 	}
-	if args != "" {
+	if !protocol.NoArgsRE.MatchString(args) {
 		s.badParams(c, "LIST")
 		return false, ""
 	}
 	s.numeric(c, "321", "Channel :Users Name")
 	for _, ch := range s.sortedChannels() {
+		if !s.canSeeChannel(c, ch) {
+			continue
+		}
 		s.mu.RLock()
 		count := len(ch.Members)
 		topic := ch.Topic
@@ -776,13 +822,95 @@ func (s *Server) cmdMOTD(c *model.Client, args string) (bool, string) {
 	if !s.requireRegistered(c) {
 		return false, ""
 	}
-	if args != "" {
+	if !protocol.NoArgsRE.MatchString(args) {
 		s.badParams(c, "MOTD")
 		return false, ""
 	}
 	s.numeric(c, "375", ":- IRCapybara Message of the Day -")
 	s.numeric(c, "372", ":- Single-server, simplicity-first IRC")
 	s.numeric(c, "376", ":End of MOTD")
+	return false, ""
+}
+
+func (s *Server) cmdTIME(c *model.Client, args string) (bool, string) {
+	if !s.requireRegistered(c) {
+		return false, ""
+	}
+	if !protocol.NoArgsRE.MatchString(args) {
+		s.badParams(c, "TIME")
+		return false, ""
+	}
+	s.numeric(c, "391", s.cfg.ServerName+" :"+time.Now().UTC().Format(time.RFC3339))
+	return false, ""
+}
+
+func (s *Server) cmdUPTIME(c *model.Client, args string) (bool, string) {
+	if !s.requireRegistered(c) {
+		return false, ""
+	}
+	if !protocol.NoArgsRE.MatchString(args) {
+		s.badParams(c, "UPTIME")
+		return false, ""
+	}
+	uptime := time.Since(s.startedAt).Truncate(time.Second)
+	s.notice(c, "Server uptime: "+uptime.String())
+	return false, ""
+}
+
+func (s *Server) cmdHISTORY(c *model.Client, args string) (bool, string) {
+	if !s.requireRegistered(c) {
+		return false, ""
+	}
+	m := protocol.HistoryArgsRE.FindStringSubmatch(args)
+	if m == nil {
+		s.badParams(c, "HISTORY")
+		return false, ""
+	}
+	limit := 20
+	if m[2] != "" {
+		n, err := strconv.Atoi(m[2])
+		if err != nil || n < 1 || n > 100 {
+			s.badParams(c, "HISTORY")
+			return false, ""
+		}
+		limit = n
+	}
+	norm := protocol.Norm(m[1])
+	s.mu.RLock()
+	ch := s.channels[norm]
+	if ch == nil || !s.canSeeChannelLocked(c, ch) {
+		s.mu.RUnlock()
+		s.numeric(c, "403", m[1]+" :No such channel")
+		return false, ""
+	}
+	_, joined := ch.Members[c]
+	if !joined && !c.IsOper {
+		s.mu.RUnlock()
+		s.numeric(c, "442", ch.Name+" :You're not on that channel")
+		return false, ""
+	}
+	if !ch.HistoryEnabled {
+		s.mu.RUnlock()
+		s.notice(c, "History is disabled for "+ch.Name)
+		return false, ""
+	}
+	start := len(ch.History) - limit
+	if start < 0 {
+		start = 0
+	}
+	history := append([]model.HistoryMessage(nil), ch.History[start:]...)
+	channelName := ch.Name
+	s.mu.RUnlock()
+
+	s.notice(c, fmt.Sprintf("History replay for %s: %d message(s), oldest first", channelName, len(history)))
+	for _, item := range history {
+		verb := "PRIVMSG"
+		if item.Notice {
+			verb = "NOTICE"
+		}
+		line := fmt.Sprintf(":%s!%s@%s %s %s :%s", item.Nick, item.Username, item.Host, verb, channelName, item.Text)
+		s.sendLine(c, line)
+	}
 	return false, ""
 }
 
@@ -807,7 +935,7 @@ func (s *Server) cmdMODE(c *model.Client, args string) (bool, string) {
 	s.mu.RLock()
 	ch := s.channels[norm]
 	s.mu.RUnlock()
-	if ch == nil {
+	if ch == nil || !s.canInspectChannel(c, ch) {
 		s.numeric(c, "403", m[1]+" :No such channel")
 		return false, ""
 	}
@@ -898,6 +1026,37 @@ func (s *Server) cmdMODE(c *model.Client, args string) (bool, string) {
 			return false, ""
 		}
 		ch.Modes.TopicOps = false
+	case "+s", "-s":
+		if param != "" {
+			s.mu.Unlock()
+			s.badParams(c, "MODE")
+			return false, ""
+		}
+		private := mode == "+s"
+		if err := s.store.SetChannelPolicy(norm, private, ch.HistoryEnabled); err != nil {
+			s.mu.Unlock()
+			log.Printf("set private policy %s: %v", ch.Name, err)
+			s.numeric(c, "400", ":Storage error")
+			return false, ""
+		}
+		ch.Private = private
+	case "+H", "-H":
+		if param != "" {
+			s.mu.Unlock()
+			s.badParams(c, "MODE")
+			return false, ""
+		}
+		historyEnabled := mode == "+H"
+		if err := s.store.SetChannelPolicy(norm, ch.Private, historyEnabled); err != nil {
+			s.mu.Unlock()
+			log.Printf("set history policy %s: %v", ch.Name, err)
+			s.numeric(c, "400", ":Storage error")
+			return false, ""
+		}
+		ch.HistoryEnabled = historyEnabled
+		if !historyEnabled {
+			ch.History = nil
+		}
 	case "+k":
 		if !protocol.KeyRE.MatchString(param) {
 			s.mu.Unlock()
@@ -967,6 +1126,12 @@ func (s *Server) sendModeState(c *model.Client, ch *model.Channel) {
 	}
 	if ch.Modes.TopicOps {
 		modes += "t"
+	}
+	if ch.Private {
+		modes += "s"
+	}
+	if ch.HistoryEnabled {
+		modes += "H"
 	}
 	if ch.Modes.Key != "" {
 		modes += "k"
@@ -1203,11 +1368,19 @@ func (s *Server) cmdCHANADD(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	m := protocol.ChanAddArgsRE.FindStringSubmatch(args)
-	if m == nil || !protocol.ValidText(maybe(m, 2), 180) {
+	if m == nil || !protocol.ValidText(maybe(m, 4), 180) {
 		s.badParams(c, "CHANADD")
 		return false, ""
 	}
 	norm := protocol.Norm(m[1])
+	private := m[2] == "PRIVATE"
+	historyEnabled := m[3] != "NOHISTORY"
+	topic := m[4]
+	creatorNorm := c.IdentityAuthedNick
+	if creatorNorm == "" {
+		creatorNorm = protocol.Norm(c.Nick)
+	}
+
 	s.mu.RLock()
 	_, exists := s.channels[norm]
 	s.mu.RUnlock()
@@ -1215,15 +1388,36 @@ func (s *Server) cmdCHANADD(c *model.Client, args string) (bool, string) {
 		s.notice(c, "Channel already exists")
 		return false, ""
 	}
-	if err := s.store.AddChannel(m[1], m[2]); err != nil {
+	if err := s.store.AddChannel(m[1], topic, private, historyEnabled, creatorNorm); err != nil {
 		log.Printf("add channel: %v", err)
 		s.numeric(c, "400", ":Storage error")
 		return false, ""
 	}
+	ch := &model.Channel{
+		Name:                m[1],
+		Norm:                norm,
+		Topic:               topic,
+		Private:             private,
+		HistoryEnabled:      historyEnabled,
+		CreatorNorm:         creatorNorm,
+		Modes:               model.ChannelModes{TopicOps: true, InviteOnly: private},
+		Members:             make(map[*model.Client]*model.Membership),
+		Invited:             make(map[*model.Client]bool),
+		Participants:        make(map[string]struct{}),
+		SessionParticipants: make(map[*model.Client]struct{}),
+	}
 	s.mu.Lock()
-	s.channels[norm] = &model.Channel{Name: m[1], Norm: norm, Topic: m[2], Modes: model.ChannelModes{TopicOps: true}, Members: make(map[*model.Client]*model.Membership), Invited: make(map[*model.Client]bool)}
+	s.channels[norm] = ch
 	s.mu.Unlock()
-	s.notice(c, "Channel added: "+m[1])
+	visibility := "public"
+	if private {
+		visibility = "private"
+	}
+	history := "history"
+	if !historyEnabled {
+		history = "no-history"
+	}
+	s.notice(c, fmt.Sprintf("Channel added: %s (%s, %s)", m[1], visibility, history))
 	return false, ""
 }
 
@@ -1237,6 +1431,26 @@ func (s *Server) cmdGUARD(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	level, _ := strconv.Atoi(m[1])
+
+	kicked := 0
+	if level == 3 {
+		cutoff := time.Now().Add(-30 * time.Minute)
+		var victims []*model.Client
+		s.mu.RLock()
+		for other := range s.clients {
+			if !s.guard3RetainsLocked(other, cutoff) {
+				victims = append(victims, other)
+			}
+		}
+		s.mu.RUnlock()
+		for _, victim := range victims {
+			s.sendError(victim, "Guard level 3: recent untrusted session removed")
+			s.removeClient(victim, "Guard level 3")
+			_ = victim.Conn.Close()
+			kicked++
+		}
+	}
+
 	snap := protection.GuardSnapshot{}
 	if level > 0 {
 		ipSeen := map[string]bool{}
@@ -1259,7 +1473,11 @@ func (s *Server) cmdGUARD(c *model.Client, args string) (bool, string) {
 		s.mu.RUnlock()
 	}
 	s.protection.SetGuard(level, snap)
-	s.notice(c, fmt.Sprintf("Guard mode set to %d; snapshot has %d IP(s), %d username(s)", level, len(snap.IPs), len(snap.Users)))
+	if level == 3 {
+		s.notice(c, fmt.Sprintf("Guard mode set to 3 (IP allowlist + read-only); kicked %d recent untrusted client(s); snapshot has %d IP(s)", kicked, len(snap.IPs)))
+	} else {
+		s.notice(c, fmt.Sprintf("Guard mode set to %d; snapshot has %d IP(s), %d username(s)", level, len(snap.IPs), len(snap.Users)))
+	}
 	return false, ""
 }
 
