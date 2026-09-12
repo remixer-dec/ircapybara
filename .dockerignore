@@ -1,0 +1,10 @@
+.git
+.gitignore
+*.db
+*.db-wal
+*.db-shm
+data/
+ircapybara
+IRCapybara.zip
+go.test.mod
+go.test.sum

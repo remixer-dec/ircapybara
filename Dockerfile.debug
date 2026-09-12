@@ -1,0 +1,12 @@
+FROM golang:1.23-bookworm
+WORKDIR /src
+
+COPY go.mod ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 go build -gcflags="all=-N -l" -o /usr/local/bin/ircapybara ./cmd/ircapybara \
+    && mkdir -p /data/tls
+
+EXPOSE 6697/tcp
+CMD ["/usr/local/bin/ircapybara"]

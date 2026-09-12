@@ -1,0 +1,8 @@
+/data/
+*.db
+*.db-wal
+*.db-shm
+/ircapybara
+/go.test.mod
+/go.test.sum
+*.zip
