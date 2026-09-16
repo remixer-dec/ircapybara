@@ -1,0 +1,17 @@
+# Wails / Go build outputs
+build/bin/
+*.exe
+*.app/
+*.dmg
+*.deb
+*.rpm
+
+# Go workspace / local artifacts
+go.work
+go.work.sum
+coverage.out
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>IRCapybara</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 10.8 12 3.8l8.5 7v9.2h-6v-5.8h-5V20h-6z"/></symbol>
+    <symbol id="i-chats" viewBox="0 0 24 24"><path d="M4 5.5h12a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3H9l-4.8 3.2.9-3.2H4a3 3 0 0 1-3-3v-4a3 3 0 0 1 3-3Z"/><path d="M8 9h7M8 12h5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11m0-11-11 11"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19 7V3.8L16.4 6A8 8 0 1 0 20 13"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><path d="M9.4 8.8a3 3 0 0 1 5.8 1c0 2.1-2.2 2.6-2.8 4M12.4 18h.1"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 6.5h16v11H4z"/><path d="m7 10 2 2-2 2m5 0h4"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M6.7 7.2A7 7 0 1 1 5 14"/><path d="M3.8 5.2v4h4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M9.8 3.5h4.4l.6 2.2 1.5.9 2.2-.7 2.2 3.8-1.7 1.5v1.7l1.7 1.5-2.2 3.8-2.2-.7-1.5.9-.6 2.2H9.8l-.6-2.2-1.5-.9-2.2.7-2.2-3.8L5 12.9v-1.7L3.3 9.7l2.2-3.8 2.2.7 1.5-.9z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.2 15.6A8 8 0 0 1 8.4 4.8 8.2 8.2 0 1 0 19.2 15.6Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.7"/><path d="M12 2.5v2m0 15v2m9.5-9.5h-2m-15 0h-2m16.2-6.7-1.4 1.4M6.7 17.3l-1.4 1.4m13.4 0-1.4-1.4M6.7 6.7 5.3 5.3"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 3 7 21m10-18-2 18M4 9h16M3 15h16"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.7-4.1 3-6.2 7-6.2s6.3 2.1 7 6.2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-3.7 2.4-5.5 5.5-5.5s5 1.8 5.5 5.5"/><path d="M15.2 5.5a3 3 0 0 1 0 5.1M16.5 13.7c2.3.5 3.6 2.2 4 5.3"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="m8 3 2 4m4-4-2 4M7 8h10v2a5 5 0 0 1-5 5v5M9 20h6"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M4.5 8V4.5H8"/><path d="M5 5a8 8 0 1 1-1 9"/><path d="M12 7.5V12l3 1.8"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h8m-2 0v3m-3-3v2"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8.2 12.5 5.7-5.7a3.2 3.2 0 1 1 4.5 4.5l-7.2 7.2a5 5 0 0 1-7.1-7.1l7-7"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 4 16 8-16 8 3-8z"/><path d="M7 12h13"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></symbol>
+    <symbol id="i-arrow-down-left" viewBox="0 0 24 24"><path d="M17 7 7 17m8 0H7V9"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M5.5 16.5h13c-1.2-1.3-1.8-3.1-1.8-5.4 0-3-1.8-5.1-4.7-5.1s-4.7 2.1-4.7 5.1c0 2.3-.6 4.1-1.8 5.4Z"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 21h6m-3-4v4"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1.2a2 2 0 0 0 1.5-3.3l-.5-.6a1.5 1.5 0 0 1 1.1-2.5H17A4 4 0 0 0 21 10.5C21 6.3 17 3 12 3Z"/><circle cx="7.5" cy="10" r="1"/><circle cx="10" cy="6.8" r="1"/><circle cx="14" cy="6.8" r="1"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.1M8 17h.1"/></symbol>
+    <symbol id="i-crown" viewBox="0 0 24 24"><path d="m4 7 4 4 4-6 4 6 4-4-2 10H6z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10m-4-4 4 4 4-4M5 19h14"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 8.5h17"/></symbol>
+  </svg>
+
+  <div id="app" v-cloak class="app-shell">
+    <aside class="sidebar" aria-label="Conversations">
+      <div class="server-card">
+        <img class="brand-avatar large" src="./assets/capybara/capybara-1.svg" alt="" draggable="false" />
+        <div class="server-copy">
+          <strong>{{ serverLabel }}</strong>
+          <span class="status-line"><i :class="['status-dot', statusClass]"></i><span>{{ statusLabel }}</span></span>
+        </div>
+        <div class="server-actions">
+          <button v-if="isConnected" class="icon-button" type="button" title="Disconnect" aria-label="Disconnect" @click="disconnect"><svg class="icon"><use href="#i-x"></use></svg></button>
+          <template v-else>
+            <button v-if="canReconnect" class="icon-button reconnect-button" type="button" title="Reconnect" aria-label="Reconnect" :disabled="busy" @click="reconnect"><svg class="icon"><use href="#i-refresh"></use></svg></button>
+            <button class="icon-button" type="button" title="Connection settings" aria-label="Connection settings" @click="openModal('connect')"><svg class="icon"><use href="#i-settings"></use></svg></button>
+          </template>
+        </div>
+      </div>
+
+      <nav class="primary-nav" aria-label="Primary">
+        <button :class="['nav-row', {active: viewMode === 'conversation' && activeId === 'status'}]" type="button" title="Home" @click="openConversation('status')">
+          <span class="nav-icon"><svg class="icon"><use href="#i-home"></use></svg></span><span>Home</span>
+        </button>
+        <button :class="['nav-row', {active: viewMode === 'overview'}]" type="button" title="All Chats" @click="viewMode = 'overview'">
+          <span class="nav-icon"><svg class="icon"><use href="#i-chats"></use></svg></span><span>All Chats</span>
+          <span v-if="totalUnread" class="unread">{{ compactCount(totalUnread) }}</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-scroll">
+        <div class="nav-section" v-if="channelConversations.length">
+          <div class="section-label">
+            <span>Channels</span>
+            <span class="section-actions">
+              <button class="section-add" type="button" title="Refresh channel list" aria-label="Refresh channel list" :disabled="!isConnected" @click="refreshChannels"><svg class="icon"><use href="#i-refresh"></use></svg></button>
+              <button class="section-add" type="button" title="Open channel" aria-label="Open channel" @click="openModal('chat')"><svg class="icon"><use href="#i-plus"></use></svg></button>
+            </span>
+          </div>
+          <div v-for="conv in channelConversations" :key="conv.id" :class="['nav-item', {active: viewMode === 'conversation' && activeId === conv.id}]">
+            <button :class="['nav-row', {active: viewMode === 'conversation' && activeId === conv.id}]" type="button" :title="conv.joined ? conv.name : `${conv.name} · available`" @click="openConversation(conv.id)">
+              <span :class="['nav-icon', {joined: conv.joined}]"><svg class="icon"><use href="#i-hash"></use></svg></span>
+              <span class="nav-text">{{ conv.name }}</span>
+              <span v-if="!conv.joined" class="catalog-dot" title="Available; not joined"></span>
+              <span v-if="unread[conv.id]" class="unread">{{ compactCount(unread[conv.id]) }}</span>
+            </button>
+            <button class="nav-close" type="button" :title="conv.joined ? `Leave ${conv.name}` : `Remove ${conv.name}`" :aria-label="conv.joined ? `Leave ${conv.name}` : `Remove ${conv.name}`" @click.stop="closeConversation(conv)"><svg class="icon"><use href="#i-x"></use></svg></button>
+          </div>
+        </div>
+
+        <div class="nav-section" v-if="dmConversations.length">
+          <div class="section-label"><span>Direct Messages</span><button class="section-add" type="button" aria-label="Open direct message" @click="openModal('chat')"><svg class="icon"><use href="#i-plus"></use></svg></button></div>
+          <div v-for="conv in dmConversations" :key="conv.id" :class="['nav-item', {active: viewMode === 'conversation' && activeId === conv.id}]">
+            <button :class="['nav-row', {active: viewMode === 'conversation' && activeId === conv.id}]" type="button" :title="conv.name" @click="openConversation(conv.id)">
+              <span :class="['presence-avatar', {plugin: conv.kind === 'virtual-dm'}]">
+                <img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(conv.name)" alt="" draggable="false" /><span v-else>{{ avatarLetters(conv.name) }}</span>
+              </span>
+              <span class="nav-text">{{ conv.name }}</span>
+              <span v-if="unread[conv.id]" class="unread">{{ compactCount(unread[conv.id]) }}</span>
+            </button>
+            <button class="nav-close" type="button" :title="`Close ${conv.name}`" :aria-label="`Close ${conv.name}`" @click.stop="closeConversation(conv)"><svg class="icon"><use href="#i-x"></use></svg></button>
+          </div>
+        </div>
+
+        <div class="nav-section" v-if="!channelConversations.length && !dmConversations.length">
+          <div class="section-label"><span>Chats</span><button class="section-add" type="button" aria-label="Open chat" @click="openModal('chat')"><svg class="icon"><use href="#i-plus"></use></svg></button></div>
+          <p class="sidebar-empty">The server channel list and your conversations appear here after connecting.</p>
+        </div>
+
+        <div class="nav-section utilities">
+          <div class="section-label"><span>Tools</span></div>
+          <button class="nav-row" type="button" :disabled="!isConnected" @click="openModal('help')"><span class="nav-icon"><svg class="icon"><use href="#i-help"></use></svg></span><span>Server Help</span></button>
+          <button class="nav-row" type="button" @click="openProtocolLog"><span class="nav-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span><span>Protocol Log</span></button>
+          <button class="nav-row" type="button" :disabled="!isConnected" @click="resetAI"><span class="nav-icon"><svg class="icon"><use href="#i-reset"></use></svg></span><span>Reset AI Conversation</span></button>
+        </div>
+      </div>
+
+      <div class="identity-card">
+        <span class="presence-avatar identity-avatar">
+          <img v-if="appearancePrefs.capybaraAvatars && snapshot.nick" :src="capybaraAvatar(snapshot.nick)" alt="" draggable="false" /><span v-else>{{ avatarLetters(snapshot.nick || '?') }}</span>
+        </span>
+        <div class="identity-copy"><strong>{{ snapshot.nick || 'Offline' }}</strong><span>{{ identityLabel }}</span></div>
+        <button class="icon-button" type="button" title="Settings" aria-label="Settings" @click="openSettings('appearance')"><svg class="icon"><use href="#i-settings"></use></svg></button>
+        <button class="theme-button" type="button" :title="themeTitle" :aria-label="themeTitle" @click="toggleTheme"><svg class="icon"><use :href="theme === 'dark' ? '#i-moon' : '#i-sun'"></use></svg><span class="theme-switch-label">{{ theme === 'dark' ? 'Dark' : 'Light' }}</span></button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="conversation-mark" aria-hidden="true"><svg class="icon"><use :href="`#i-${headerIcon}`"></use></svg></div>
+        <div class="conversation-heading">
+          <h1>{{ headerTitle }}</h1>
+          <p>{{ headerSubtitle }}</p>
+        </div>
+        <button v-if="viewMode === 'conversation' && selectedConversation && selectedConversation.kind !== 'status' && selectedConversation.joined && selectedConversation.id.startsWith('#')" class="member-summary" type="button" title="Online / total members" @click="openMembers">
+          <svg class="icon"><use href="#i-users"></use></svg><span>{{ selectedConversation.onlineCount || 0 }} / {{ selectedConversation.memberCount || selectedConversation.onlineCount || 0 }}</span>
+        </button>
+        <div class="topbar-actions">
+          <button v-if="viewMode === 'conversation' && selectedConversation && selectedConversation.kind !== 'status'" class="icon-button" type="button" :disabled="!canRequestHistory" title="Load recent history" aria-label="Load recent history" @click="requestHistory"><svg class="icon"><use href="#i-history"></use></svg></button>
+          <button class="icon-button protocol-button" type="button" title="Protocol log" aria-label="Protocol log" @click="openProtocolLog"><svg class="icon"><use href="#i-terminal"></use></svg></button>
+          <button class="icon-button" type="button" :disabled="!canIdentify" :title="snapshot.identityStatus === 'failed' ? snapshot.identityDetail : 'Identify a registered nickname'" aria-label="Identify a registered nickname" @click="openModal('identify')"><svg class="icon"><use href="#i-key"></use></svg></button>
+          <button v-if="viewMode === 'conversation' && selectedConversation" class="icon-button" type="button" title="Conversation details" aria-label="Conversation details" @click="openModal('details')"><svg class="icon"><use href="#i-more"></use></svg></button>
+        </div>
+      </header>
+
+      <section v-if="banner.visible" class="banner" aria-live="polite">
+        <div><strong>{{ banner.title }}</strong><span>{{ banner.text }}</span></div>
+        <button v-if="banner.action" class="secondary-button" type="button" @click="bannerAction">{{ banner.action }}</button>
+      </section>
+
+      <section v-if="viewMode === 'overview'" class="overview" aria-label="All chats">
+        <div class="overview-heading">
+          <div><span class="eyebrow">Workspace</span><h2>All chats</h2><p>Available channels, joined rooms, direct messages, and plugin-backed conversations.</p></div>
+          <button class="primary-button" type="button" :disabled="!canOpenChats" @click="openModal('chat')">Open chat</button>
+        </div>
+        <div v-if="visibleConversations.length" class="chat-grid">
+          <button v-for="conv in visibleConversations" :key="conv.id" class="chat-card" type="button" @click="openConversation(conv.id)">
+            <div class="chat-card-icon"><svg class="icon"><use :href="`#i-${conversationIcon(conv)}`"></use></svg></div>
+            <div class="chat-card-copy"><strong>{{ conv.name }}</strong><span>{{ isConnected && conv.catalogued && !conv.joined ? 'Available channel' : kindLabel(conv.kind) }}</span><p>{{ lastPreview(conv) }}</p></div>
+            <span v-if="unread[conv.id]" class="unread">{{ compactCount(unread[conv.id]) }}</span>
+          </button>
+        </div>
+        <div v-else class="empty-state compact-empty"><div><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><h2>No chats yet</h2><p>Connect to load the server's channel catalogue, or open a direct-message target.</p></div></div>
+      </section>
+
+      <section v-else ref="messagesEl" class="messages" aria-live="polite">
+        <div v-if="!selectedConversation || !selectedConversation.messages.length" class="empty-state">
+          <div class="empty-state-card"><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><span class="empty-kicker">{{ isConnected ? 'IRCapybara' : 'Desktop client' }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><div v-if="!isConnected" class="empty-actions"><button v-if="canReconnect" class="primary-button empty-action" type="button" :disabled="busy" @click="reconnect"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ busy ? 'Reconnecting…' : 'Reconnect' }}</button><button :class="canReconnect ? 'secondary-button' : 'primary-button'" type="button" @click="openModal('connect')">Connection settings</button></div></div>
+        </div>
+        <template v-for="(message, index) in selectedConversation?.messages || []" :key="message.id">
+          <div v-if="showDaySeparator(index, selectedConversation.messages)" class="day-separator"><span>{{ formatDay(message.time) }}</span></div>
+          <article :class="['message', {synthetic: message.synthetic, system: message.system, historical: message.historical}]">
+            <div class="message-avatar" aria-hidden="true"><img v-if="appearancePrefs.capybaraAvatars && !message.system" :src="capybaraAvatar(message.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(message.sender) }}</span></div>
+            <div class="message-body">
+              <div class="message-meta"><strong>{{ message.sender }}</strong><span v-if="message.synthetic" class="synthetic-badge">service</span><span v-if="message.historical" class="history-badge">history</span></div>
+              <div v-if="message.text" class="message-text"><template v-for="(segment, segmentIndex) in linkifyText(message.text)" :key="segmentIndex"><a v-if="segment.url" class="message-link" :href="segment.url" @click.prevent="openExternalLink(segment.url)">{{ segment.text }}</a><span v-else>{{ segment.text }}</span></template></div>
+              <div v-if="message.attachment" :class="['attachment-card', `transfer-${transferState(message.attachment).status}`]">
+                <div class="file-icon">{{ fileBadge(message.attachment.mime) }}</div>
+                <div class="file-copy">
+                  <strong>{{ message.attachment.filename }}</strong>
+                  <span>{{ formatBytes(message.attachment.size) }} · {{ message.attachment.mime || 'file' }}</span>
+                  <div v-if="['downloading','receiving-missing'].includes(transferState(message.attachment).status)" class="transfer-progress-copy"><span>{{ transferStatusLabel(message.attachment) }} · {{ formatBytes(transferState(message.attachment).received) }} / {{ formatBytes(transferState(message.attachment).total || message.attachment.size) }}</span><strong>{{ transferState(message.attachment).percent || 0 }}%</strong></div>
+                  <div v-else-if="transferState(message.attachment).status === 'queued'" class="transfer-result">Queued · waiting for server transfer metadata</div>
+                  <div v-else-if="transferState(message.attachment).status === 'verifying' || transferState(message.attachment).status === 'verified'" class="transfer-result">{{ transferStatusLabel(message.attachment) }}…</div>
+                  <div v-else-if="transferState(message.attachment).status === 'complete'" class="transfer-result success">Downloaded · verified and ready in its saved folder</div>
+                  <div v-else-if="transferState(message.attachment).status === 'interrupted'" class="transfer-result error">{{ transferState(message.attachment).error || 'Connection interrupted. Partial data is retained.' }}</div>
+                  <div v-else-if="transferState(message.attachment).status === 'retry-available'" class="transfer-result error">{{ transferState(message.attachment).error || 'Automatic recovery stopped. Retry is available.' }}</div>
+                  <div v-else-if="transferState(message.attachment).status === 'expired' || transferState(message.attachment).status === 'unauthorized'" class="transfer-result error">{{ transferState(message.attachment).error || transferStatusLabel(message.attachment) }}</div>
+                  <button v-if="isConnected && (transferState(message.attachment).status === 'interrupted' || transferState(message.attachment).status === 'retry-available')" class="attachment-restart" type="button" @click="restartAttachment(message.attachment)">Start over</button>
+                </div>
+                <button :class="['secondary-button', 'attachment-download', transferState(message.attachment).status]" type="button" :disabled="transferIsBusy(message.attachment) || transferState(message.attachment).status === 'expired' || transferState(message.attachment).status === 'unauthorized' || ((!isConnected || !snapshot.extended) && transferState(message.attachment).status !== 'complete')" @click="downloadAttachment(message.attachment)"><svg class="icon"><use :href="`#i-${transferButtonIcon(message.attachment)}`"></use></svg><span>{{ transferButtonLabel(message.attachment) }}</span></button>
+                <div v-if="['downloading','receiving-missing'].includes(transferState(message.attachment).status)" class="transfer-progress" role="progressbar" :aria-valuenow="transferState(message.attachment).percent || 0" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${transferState(message.attachment).percent || 0}%` }"></span></div>
+              </div>
+            </div>
+            <time class="message-time" :datetime="message.time">{{ formatTime(message.time) }}</time>
+          </article>
+        </template>
+      </section>
+
+      <section v-if="viewMode === 'conversation' && canCompose" class="composer-wrap">
+        <div class="composer">
+          <button class="attach-button" type="button" title="Attach file" aria-label="Attach file" :disabled="!canAttach" @click="pickAndUpload"><svg class="icon"><use href="#i-paperclip"></use></svg></button>
+          <textarea ref="messageInput" v-model="draft" rows="1" maxlength="131072" autocorrect="on" autocapitalize="sentences" spellcheck="true" :placeholder="composerPlaceholder" @input="normalizeDraft" @keydown.enter.exact.prevent="sendMessage"></textarea>
+          <span :class="['char-count', {warn: codePointCount > 30000, danger: codePointCount > 32768}]">{{ codePointCount ? `${codePointCount.toLocaleString()} / 32,768` : '' }}</span>
+          <button class="send-button" type="button" aria-label="Send message" :disabled="!canSend" @click="sendMessage"><svg class="icon"><use href="#i-send"></use></svg></button>
+        </div>
+        <div class="composer-hint">{{ composerHint }}</div>
+      </section>
+    </main>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'connect'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="connect-title" @click.self="closeModal">
+        <form class="modal-card" @submit.prevent="connect">
+          <div class="modal-header"><div><span class="eyebrow">Connection</span><h2 id="connect-title">Connect to IRCapybara</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <div class="field-grid two"><label><span>Server address</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.host" autocomplete="off" placeholder="ircapybara.local" required /></label><label><span>Port</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.number="connection.port" type="number" min="1" max="65535" required /></label></div>
+          <label><span>Server display name <em>optional; only changes how the server is labeled in the app</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.serverLabel" autocomplete="off" placeholder="Home server" /></label>
+          <div class="field-grid two balanced"><label><span>Nickname</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.nick" autocomplete="username" placeholder="alice" required /></label><label><span>Display name</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.displayName" autocomplete="off" placeholder="Alice" /></label></div>
+          <div class="field-grid two balanced"><label><span>Server password <em>PASS · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.serverPassword" type="password" autocomplete="off" /></label><label><span>Identity password <em>IDENTIFY · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.identityPassword" type="password" autocomplete="off" /></label></div>
+          <label><span>Identity nickname <em>optional; only for IDENTIFY &lt;nick&gt; &lt;password&gt;</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.identityNick" autocomplete="off" :placeholder="connection.nick || 'alice'" /></label>
+          <label><span>Auto-join channels <em>#general is first; channels you successfully join are remembered</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.autoJoinText" autocomplete="off" placeholder="#general, #ai, #rss-news" /></label>
+          <div class="tls-options">
+            <div class="tls-heading"><strong>TLS</strong><span>IRC transport is always encrypted.</span></div>
+            <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.allowSelfSigned" type="checkbox" :disabled="connection.pinServerCertificate" /><span><strong>Allow self-signed or otherwise untrusted certificates</strong><small>Enabled by default for local servers. Traffic is encrypted, but certificate identity is not verified.</small></span></label>
+            <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinServerCertificate" type="checkbox" @change="connection.allowSelfSigned = connection.pinServerCertificate ? false : connection.allowSelfSigned" /><span><strong>Trust only a specific certificate or public key</strong><small>Use this to keep local/private certificates while still pinning the server cryptographically.</small></span></label>
+            <div v-if="connection.pinServerCertificate" class="certificate-picker"><label><span>Certificate or public-key file</span><div class="file-field"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinnedCertificatePath" autocomplete="off" readonly placeholder="Choose a .pem, .crt, .cer, .der or .pub file" /><button class="secondary-button" type="button" @click="pickTLSCertificate">Choose</button></div></label></div>
+          </div>
+          <p class="security-note">PASS and IDENTIFY are separate credentials. Neither is saved. IDENTIFY is sent exactly as <code>IDENTIFY password</code> or <code>IDENTIFY nick password</code>.</p>
+          <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? 'Connecting…' : 'Connect' }}</button></div>
+          <p class="form-error">{{ formError }}</p>
+        </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'identify'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="identify-title" @click.self="closeModal">
+        <form class="modal-card compact" @submit.prevent="identify">
+          <div class="modal-header"><div><span class="eyebrow">Optional account identity</span><h2 id="identify-title">Identify</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <p class="modal-copy">Only registered nicknames need this. Ordinary unregistered nicknames can chat without IDENTIFY.</p>
+          <p v-if="snapshot.identityStatus === 'failed'" class="inline-feedback error">{{ snapshot.identityDetail }}</p>
+          <p v-if="snapshot.identityStatus === 'pending'" class="inline-feedback">Waiting for server confirmation.</p>
+          <label><span>Nickname override <em>optional</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="identityNick" autocomplete="off" :placeholder="snapshot.nick || 'alice'" /></label>
+          <label><span>Identity password</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="identityPassword" type="password" autocomplete="off" required autofocus /></label>
+          <p class="field-note">Passwords for IDENTIFY cannot contain spaces because the server syntax is token-based.</p>
+          <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? 'Sending…' : 'Identify' }}</button></div>
+          <p class="form-error">{{ formError }}</p>
+        </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'captcha'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="captcha-title">
+        <form class="modal-card compact" @submit.prevent="solveCaptcha">
+          <div class="modal-header"><div><span class="eyebrow">Server challenge</span><h2 id="captcha-title">Quick verification</h2></div></div>
+          <p class="modal-copy">{{ snapshot.captchaPrompt || 'Complete the challenge requested by the server.' }}</p>
+          <label><span>Answer</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="captchaAnswer" autocomplete="off" inputmode="numeric" required autofocus /></label>
+          <div class="modal-actions"><button class="primary-button" type="submit" :disabled="busy">Submit answer</button></div><p class="form-error">{{ formError }}</p>
+        </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'chat'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="chat-title" @click.self="closeModal">
+        <form class="modal-card compact" @submit.prevent="openChat">
+          <div class="modal-header"><div><span class="eyebrow">Conversation</span><h2 id="chat-title">Open a chat</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <label><span>Channel or direct-message target</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="chatTarget" autocomplete="off" placeholder="#general or tg-family" required autofocus /></label>
+          <p class="modal-copy">Channels shown in the sidebar come from LIST and are not joined until you open them. Other targets can be people or server-backed virtual identities.</p>
+          <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy || !canOpenChats">Open</button></div><p class="form-error">{{ formError }}</p>
+        </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'help'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="help-title" @click.self="closeModal">
+        <form class="modal-card compact" @submit.prevent="requestHelp">
+          <div class="modal-header"><div><span class="eyebrow">Dynamic server syntax</span><h2 id="help-title">Server help</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <label><span>Topic <em>optional</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="helpTopic" autocomplete="off" placeholder="XFER, AI, YTDL…" autofocus /></label>
+          <p class="modal-copy">Help is requested from the connected server so extensions remain discoverable without hard-coding every plugin command into the client.</p>
+          <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy">Request help</button></div><p class="form-error">{{ formError }}</p>
+        </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'settings'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title" @click.self="closeModal">
+        <div class="modal-card settings-card">
+          <div class="modal-header"><div><span class="eyebrow">Preferences</span><h2 id="settings-title">Settings</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <div class="settings-layout">
+            <nav class="settings-tabs" aria-label="Settings sections">
+              <button :class="{active: settingsTab === 'appearance'}" type="button" @click="settingsTab = 'appearance'"><svg class="icon"><use href="#i-palette"></use></svg><span>Appearance</span></button>
+              <button :class="{active: settingsTab === 'notifications'}" type="button" @click="settingsTab = 'notifications'"><svg class="icon"><use href="#i-bell"></use></svg><span>Notifications</span></button>
+              <button :class="{active: settingsTab === 'connection'}" type="button" @click="settingsTab = 'connection'"><svg class="icon"><use href="#i-server"></use></svg><span>Connection</span></button>
+            </nav>
+            <section class="settings-pane">
+              <template v-if="settingsTab === 'appearance'">
+                <h3>Appearance</h3><p class="settings-intro">Visual preferences are local to this device.</p>
+                <div class="setting-block"><span class="setting-title">Theme</span><div class="segmented"><button :class="{active: theme === 'light'}" type="button" @click="theme !== 'light' && toggleTheme()"><svg class="icon"><use href="#i-sun"></use></svg>Light</button><button :class="{active: theme === 'dark'}" type="button" @click="theme !== 'dark' && toggleTheme()"><svg class="icon"><use href="#i-moon"></use></svg>Dark</button></div></div>
+                <label class="check-row setting-check"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="appearancePrefs.capybaraAvatars" type="checkbox" /><span><strong>Capybara avatars</strong><small>Use one of two deterministic capybara SVGs per nickname. The same nickname always receives the same avatar.</small></span></label>
+              </template>
+              <template v-else-if="settingsTab === 'notifications'">
+                <h3>Notifications</h3><p class="settings-intro">Historical replay never alerts. Unread counts remain available even when notifications are disabled.</p>
+                <div class="settings-list">
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.enabled" type="checkbox" /><span><strong>Notifications</strong><small>Master switch for message alerts.</small></span></label>
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.popup" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>In-app banners</strong><small>Show a compact sender, conversation, and preview card while the app is focused.</small></span></label>
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.sound" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>Sound</strong><small>Play a bundled alert sound for new messages while focused, and request a system-notification sound while unfocused.</small></span></label>
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.system" type="checkbox" :disabled="!notificationPrefs.enabled" @change="systemNotificationChanged" /><span><strong>System notifications when unfocused</strong><small>Use native macOS, Windows, or Linux notifications when IRCapybara is not focused.</small></span></label>
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.allChannels" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>Notify for all channel messages</strong><small>When off, in-app and system banners are limited to DMs and nickname mentions. Sounds are controlled separately by the Sound setting.</small></span></label>
+                </div>
+                <div class="settings-actions notification-tests"><button class="secondary-button" type="button" :disabled="!notificationPrefs.enabled || !notificationPrefs.sound" @click="testNotificationSound"><svg class="icon button-icon"><use href="#i-bell"></use></svg>Test sound</button><button class="secondary-button" type="button" :disabled="!notificationPrefs.enabled || !notificationPrefs.popup" @click="testInAppNotification"><svg class="icon button-icon"><use href="#i-chats"></use></svg>Test in-app banner</button></div>
+              </template>
+              <template v-else>
+                <h3>Connection</h3><p class="settings-intro">Connection credentials are never stored.</p>
+                <dl class="detail-list"><div><dt>Server</dt><dd>{{ serverLabel }}</dd></div><div><dt>Nickname</dt><dd>{{ snapshot.nick || connection.nick || 'Not set' }}</dd></div><div><dt>State</dt><dd>{{ statusLabel }}</dd></div><div><dt>Identity</dt><dd>{{ identityLabel }}</dd></div><div><dt>Transport</dt><dd>TLS</dd></div></dl>
+                <div class="settings-actions"><button v-if="!isConnected" class="secondary-button" type="button" @click="closeModal(); openModal('connect')">Connection setup</button><button v-if="canIdentify" class="secondary-button" type="button" @click="closeModal(); openModal('identify')">Identify nickname</button><button class="secondary-button" type="button" @click="closeModal(); openProtocolLog()">Protocol log</button></div>
+              </template>
+            </section>
+          </div>
+          <div class="modal-actions"><button class="primary-button" type="button" @click="closeModal">Done</button></div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'members' && selectedConversation" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="members-title" @click.self="closeModal">
+        <div class="modal-card compact members-card">
+          <div class="modal-header"><div><span class="eyebrow">Channel members</span><h2 id="members-title">{{ selectedConversation.name }}</h2><p class="member-count-line">{{ selectedConversation.onlineCount || 0 }} online / {{ selectedConversation.memberCount || selectedConversation.onlineCount || 0 }} total</p></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <div class="member-list">
+            <div v-for="member in selectedConversation.members || []" :key="member.nick" class="member-row"><span class="presence-avatar"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(member.nick)" alt="" draggable="false" /><span v-else>{{ avatarLetters(member.nick) }}</span></span><div><strong>{{ member.nick }}</strong><span><i class="status-dot online"></i>Online</span></div><svg v-if="member.operator" class="icon member-role" title="Channel operator"><use href="#i-crown"></use></svg></div>
+            <div v-if="!(selectedConversation.members || []).length" class="member-empty">{{ memberLoading ? 'Refreshing member list…' : 'No online members were reported yet.' }}</div>
+          </div>
+          <p v-if="selectedConversation.memberCount > selectedConversation.onlineCount" class="field-note">IRC NAMES exposes currently present users. The server catalogue reports a larger total for this channel.</p>
+          <div class="modal-actions"><button class="secondary-button" type="button" :disabled="memberLoading" @click="refreshMembers"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ memberLoading ? 'Refreshing…' : 'Refresh' }}</button><button class="primary-button" type="button" @click="closeModal">Done</button></div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'protocol'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="protocol-title" @click.self="closeModal">
+        <div class="modal-card protocol-card">
+          <div class="modal-header"><div><span class="eyebrow">Connection diagnostics</span><h2 id="protocol-title">Protocol log</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <p class="modal-copy">IRC lines are shown in exact order. Outbound and inbound directions are marked separately. Passwords, captcha answers, and transfer chunk payloads are redacted without changing command structure.</p>
+          <div class="protocol-summary"><span><i :class="['status-dot', statusClass]"></i>{{ statusLabel }}</span><span>{{ snapshot.stateDetail || 'No additional state detail' }}</span></div>
+          <div ref="protocolEl" class="protocol-log" role="log" aria-label="IRC protocol trace">
+            <div v-if="!protocolTrace.length" class="protocol-empty">No IRC commands have been exchanged in this session yet.</div>
+            <div v-for="entry in protocolTrace" :key="entry.seq" :class="['protocol-line', entry.direction]"><span class="protocol-seq">#{{ entry.seq }}</span><time>{{ formatTraceTime(entry.time) }}</time><span class="protocol-direction"><svg class="icon"><use :href="entry.direction === 'out' ? '#i-arrow-up-right' : '#i-arrow-down-left'"></use></svg></span><code>{{ entry.line }}</code></div>
+          </div>
+          <div class="modal-actions"><button type="button" class="secondary-button" :disabled="!protocolTrace.length" @click="copyProtocolLog"><svg class="icon button-icon"><use href="#i-copy"></use></svg>Copy log</button><button class="primary-button" type="button" @click="closeModal">Done</button></div>
+        </div>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'details' && selectedConversation" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="details-title" @click.self="closeModal">
+        <div class="modal-card compact">
+          <div class="modal-header"><div><span class="eyebrow">Conversation</span><h2 id="details-title">{{ selectedConversation.name }}</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <dl class="detail-list"><div><dt>Type</dt><dd>{{ kindLabel(selectedConversation.kind) }}</dd></div><div><dt>Target</dt><dd><code>{{ selectedConversation.id }}</code></dd></div><div v-if="selectedConversation.memberCount"><dt>Presence</dt><dd>{{ selectedConversation.onlineCount || 0 }} online / {{ selectedConversation.memberCount }} total</dd></div><div v-if="selectedConversation.kind !== 'status'"><dt>State</dt><dd>{{ selectedConversation.joined ? 'Joined' : (selectedConversation.catalogued ? 'Available, not joined' : 'Open') }}</dd></div><div><dt>Rendering</dt><dd>Plain text with safe clickable HTTP(S) links</dd></div><div v-if="snapshot.extended"><dt>Attachments</dt><dd>IRCapybara transfer support available</dd></div></dl>
+          <div class="modal-actions"><button v-if="selectedConversation.kind !== 'status'" class="secondary-button destructive" type="button" @click="closeConversation(selectedConversation); closeModal()">{{ selectedConversation.joined && selectedConversation.id.startsWith('#') ? 'Leave and remove' : 'Remove from sidebar' }}</button><button class="primary-button" type="button" @click="closeModal">Done</button></div>
+        </div>
+      </div>
+    </transition>
+
+    <transition-group name="toast" tag="div" class="toast-stack" aria-live="polite">
+      <div v-for="toast in toasts" :key="toast.id" :class="['toast', toast.kind, {'message-toast': toast.type === 'message'}]">
+        <template v-if="toast.type === 'message'">
+          <span class="toast-avatar"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(toast.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(toast.sender) }}</span></span>
+          <div class="toast-message-copy"><div><strong>{{ toast.sender }}</strong><span>{{ toast.conversation }}</span></div><p>{{ toast.preview || 'New message' }}</p></div>
+        </template>
+        <template v-else>{{ toast.text }}</template>
+      </div>
+    </transition-group>
+  </div>
+
+  <script src="./vue.global.prod.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

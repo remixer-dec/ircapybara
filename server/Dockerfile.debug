@@ -1,0 +1,17 @@
+FROM mwader/static-ffmpeg:latest AS ffmpeg
+
+FROM golang:1.27-bookworm
+WORKDIR /src
+
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
+COPY go.mod ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 go build -gcflags="all=-N -l" -o /usr/local/bin/ircapybara ./cmd/ircapybara \
+    && mkdir -p /data/tls
+
+ENV IRCAPYBARA_YTDL_FFMPEG_PATH=/usr/local/bin/ffmpeg
+EXPOSE 6697/tcp
+CMD ["/usr/local/bin/ircapybara"]
