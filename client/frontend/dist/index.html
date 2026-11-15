@@ -2,7 +2,7 @@
 <html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="color-scheme" content="light dark" />
   <title>IRCapybara</title>
   <link rel="stylesheet" href="./styles.css" />
@@ -30,6 +30,10 @@
     <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8.2 12.5 5.7-5.7a3.2 3.2 0 1 1 4.5 4.5l-7.2 7.2a5 5 0 0 1-7.1-7.1l7-7"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 4 16 8-16 8 3-8z"/><path d="M7 12h13"/></symbol>
     <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.6"/><path d="M15.6 8.6v4.6a2.4 2.4 0 0 0 4.8 0V12a8.4 8.4 0 1 0-3.4 6.8"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
     <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></symbol>
     <symbol id="i-arrow-down-left" viewBox="0 0 24 24"><path d="M17 7 7 17m8 0H7V9"/></symbol>
@@ -63,7 +67,7 @@
         <button :class="['nav-row', {active: viewMode === 'conversation' && activeId === 'status'}]" type="button" title="Home" @click="openConversation('status')">
           <span class="nav-icon"><svg class="icon"><use href="#i-home"></use></svg></span><span>Home</span>
         </button>
-        <button :class="['nav-row', {active: viewMode === 'overview'}]" type="button" title="All Chats" @click="viewMode = 'overview'">
+        <button :class="['nav-row', {active: viewMode === 'overview'}]" type="button" title="All Chats" @click="openOverview">
           <span class="nav-icon"><svg class="icon"><use href="#i-chats"></use></svg></span><span>All Chats</span>
           <span v-if="totalUnread" class="unread">{{ compactCount(totalUnread) }}</span>
         </button>
@@ -106,6 +110,7 @@
         <div class="nav-section" v-if="!channelConversations.length && !dmConversations.length">
           <div class="section-label"><span>Chats</span><button class="section-add" type="button" aria-label="Open chat" @click="openModal('chat')"><svg class="icon"><use href="#i-plus"></use></svg></button></div>
           <p class="sidebar-empty">The server channel list and your conversations appear here after connecting.</p>
+          <button v-if="!isConnected" class="primary-button sidebar-connect" type="button" :disabled="busy" @click="canReconnect ? reconnect() : openModal('connect')">{{ canReconnect ? 'Reconnect' : 'Connect to a server' }}</button>
         </div>
 
         <div class="nav-section utilities">
@@ -128,6 +133,7 @@
 
     <main class="workspace">
       <header class="topbar">
+        <button class="icon-button back-button" type="button" title="Back to chats" aria-label="Back to chats" @click="showList"><svg class="icon"><use href="#i-chevron-left"></use></svg></button>
         <div class="conversation-mark" aria-hidden="true"><svg class="icon"><use :href="`#i-${headerIcon}`"></use></svg></div>
         <div class="conversation-heading">
           <h1>{{ headerTitle }}</h1>
@@ -164,13 +170,13 @@
         <div v-else class="empty-state compact-empty"><div><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><h2>No chats yet</h2><p>Connect to load the server's channel catalogue, or open a direct-message target.</p></div></div>
       </section>
 
-      <section v-else ref="messagesEl" class="messages" aria-live="polite">
+      <section v-else ref="messagesEl" class="messages" aria-live="polite" @scroll.passive="onMessagesScroll">
         <div v-if="!selectedConversation || !selectedConversation.messages.length" class="empty-state">
-          <div class="empty-state-card"><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><span class="empty-kicker">{{ isConnected ? 'IRCapybara' : 'Desktop client' }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><div v-if="!isConnected" class="empty-actions"><button v-if="canReconnect" class="primary-button empty-action" type="button" :disabled="busy" @click="reconnect"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ busy ? 'Reconnecting…' : 'Reconnect' }}</button><button :class="canReconnect ? 'secondary-button' : 'primary-button'" type="button" @click="openModal('connect')">Connection settings</button></div></div>
+          <div class="empty-state-card"><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><span class="empty-kicker">{{ isConnected ? 'IRCapybara' : (isMobile ? 'Mobile client' : 'Desktop client') }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><div v-if="!isConnected" class="empty-actions"><button v-if="canReconnect" class="primary-button empty-action" type="button" :disabled="busy" @click="reconnect"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ busy ? 'Reconnecting…' : 'Reconnect' }}</button><button :class="canReconnect ? 'secondary-button' : 'primary-button'" type="button" @click="openModal('connect')">Connection settings</button></div></div>
         </div>
         <template v-for="(message, index) in selectedConversation?.messages || []" :key="message.id">
           <div v-if="showDaySeparator(index, selectedConversation.messages)" class="day-separator"><span>{{ formatDay(message.time) }}</span></div>
-          <article :class="['message', {synthetic: message.synthetic, system: message.system, historical: message.historical}]">
+          <article :class="['message', {synthetic: message.synthetic, system: message.system, historical: message.historical}]" :data-message-id="message.id" :data-longpress="message.text ? '' : null" @contextmenu="message.text && ($event.preventDefault(), openMessageActions(message))">
             <div class="message-avatar" aria-hidden="true"><img v-if="appearancePrefs.capybaraAvatars && !message.system" :src="capybaraAvatar(message.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(message.sender) }}</span></div>
             <div class="message-body">
               <div class="message-meta"><strong>{{ message.sender }}</strong><span v-if="message.synthetic" class="synthetic-badge">service</span><span v-if="message.historical" class="history-badge">history</span></div>
@@ -183,7 +189,7 @@
                   <div v-if="['downloading','receiving-missing'].includes(transferState(message.attachment).status)" class="transfer-progress-copy"><span>{{ transferStatusLabel(message.attachment) }} · {{ formatBytes(transferState(message.attachment).received) }} / {{ formatBytes(transferState(message.attachment).total || message.attachment.size) }}</span><strong>{{ transferState(message.attachment).percent || 0 }}%</strong></div>
                   <div v-else-if="transferState(message.attachment).status === 'queued'" class="transfer-result">Queued · waiting for server transfer metadata</div>
                   <div v-else-if="transferState(message.attachment).status === 'verifying' || transferState(message.attachment).status === 'verified'" class="transfer-result">{{ transferStatusLabel(message.attachment) }}…</div>
-                  <div v-else-if="transferState(message.attachment).status === 'complete'" class="transfer-result success">Downloaded · verified and ready in its saved folder</div>
+                  <div v-else-if="transferState(message.attachment).status === 'complete'" class="transfer-result success">{{ isMobile ? 'Downloaded · verified and saved to Downloads' : 'Downloaded · verified and ready in its saved folder' }}</div>
                   <div v-else-if="transferState(message.attachment).status === 'interrupted'" class="transfer-result error">{{ transferState(message.attachment).error || 'Connection interrupted. Partial data is retained.' }}</div>
                   <div v-else-if="transferState(message.attachment).status === 'retry-available'" class="transfer-result error">{{ transferState(message.attachment).error || 'Automatic recovery stopped. Retry is available.' }}</div>
                   <div v-else-if="transferState(message.attachment).status === 'expired' || transferState(message.attachment).status === 'unauthorized'" class="transfer-result error">{{ transferState(message.attachment).error || transferStatusLabel(message.attachment) }}</div>
@@ -196,12 +202,13 @@
             <time class="message-time" :datetime="message.time">{{ formatTime(message.time) }}</time>
           </article>
         </template>
+        <div class="jump-anchor"><transition name="jump"><button v-if="awayFromLatest" class="jump-latest" type="button" title="Jump to latest message" aria-label="Jump to latest message" @click="jumpToLatest"><svg class="icon"><use href="#i-chevron-down"></use></svg><span v-if="arrivedBelow" class="unread">{{ compactCount(arrivedBelow) }}</span></button></transition></div>
       </section>
 
       <section v-if="viewMode === 'conversation' && canCompose" class="composer-wrap">
         <div class="composer">
           <button class="attach-button" type="button" title="Attach file" aria-label="Attach file" :disabled="!canAttach" @click="pickAndUpload"><svg class="icon"><use href="#i-paperclip"></use></svg></button>
-          <textarea ref="messageInput" v-model="draft" rows="1" maxlength="131072" autocorrect="on" autocapitalize="sentences" spellcheck="true" :placeholder="composerPlaceholder" @input="normalizeDraft" @keydown.enter.exact.prevent="sendMessage"></textarea>
+          <textarea ref="messageInput" v-model="draft" rows="1" maxlength="131072" enterkeyhint="send" autocorrect="on" autocapitalize="sentences" spellcheck="true" :placeholder="composerPlaceholder" @input="normalizeDraft" @keydown.enter.exact.prevent="sendMessage"></textarea>
           <span :class="['char-count', {warn: codePointCount > 30000, danger: codePointCount > 32768}]">{{ codePointCount ? `${codePointCount.toLocaleString()} / 32,768` : '' }}</span>
           <button class="send-button" type="button" aria-label="Send message" :disabled="!canSend" @click="sendMessage"><svg class="icon"><use href="#i-send"></use></svg></button>
         </div>
@@ -213,7 +220,7 @@
       <div v-if="modal === 'connect'" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="connect-title" @click.self="closeModal">
         <form class="modal-card" @submit.prevent="connect">
           <div class="modal-header"><div><span class="eyebrow">Connection</span><h2 id="connect-title">Connect to IRCapybara</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
-          <div class="field-grid two"><label><span>Server address</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.host" autocomplete="off" placeholder="ircapybara.local" required /></label><label><span>Port</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.number="connection.port" type="number" min="1" max="65535" required /></label></div>
+          <div class="field-grid two"><label><span>Server address</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.host" autocomplete="off" inputmode="url" enterkeyhint="next" placeholder="ircapybara.local" required /></label><label><span>Port</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.number="connection.port" type="number" inputmode="numeric" min="1" max="65535" required /></label></div>
           <label><span>Server display name <em>optional; only changes how the server is labeled in the app</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.serverLabel" autocomplete="off" placeholder="Home server" /></label>
           <div class="field-grid two balanced"><label><span>Nickname</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.nick" autocomplete="username" placeholder="alice" required /></label><label><span>Display name</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.displayName" autocomplete="off" placeholder="Alice" /></label></div>
           <div class="field-grid two balanced"><label><span>Server password <em>PASS · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.serverPassword" type="password" autocomplete="off" /></label><label><span>Identity password <em>IDENTIFY · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.identityPassword" type="password" autocomplete="off" /></label></div>
@@ -303,7 +310,7 @@
                   <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.enabled" type="checkbox" /><span><strong>Notifications</strong><small>Master switch for message alerts.</small></span></label>
                   <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.popup" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>In-app banners</strong><small>Show a compact sender, conversation, and preview card while the app is focused.</small></span></label>
                   <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.sound" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>Sound</strong><small>Play a bundled alert sound for new messages while focused, and request a system-notification sound while unfocused.</small></span></label>
-                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.system" type="checkbox" :disabled="!notificationPrefs.enabled" @change="systemNotificationChanged" /><span><strong>System notifications when unfocused</strong><small>Use native macOS, Windows, or Linux notifications when IRCapybara is not focused.</small></span></label>
+                  <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.system" type="checkbox" :disabled="!notificationPrefs.enabled" @change="systemNotificationChanged" /><span><strong>System notifications when unfocused</strong><small>{{ isMobile ? 'Use Android notifications while IRCapybara is in the background.' : 'Use native macOS, Windows, or Linux notifications when IRCapybara is not focused.' }}</small></span></label>
                   <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="notificationPrefs.allChannels" type="checkbox" :disabled="!notificationPrefs.enabled" /><span><strong>Notify for all channel messages</strong><small>When off, in-app and system banners are limited to DMs and nickname mentions. Sounds are controlled separately by the Sound setting.</small></span></label>
                 </div>
                 <div class="settings-actions notification-tests"><button class="secondary-button" type="button" :disabled="!notificationPrefs.enabled || !notificationPrefs.sound" @click="testNotificationSound"><svg class="icon button-icon"><use href="#i-bell"></use></svg>Test sound</button><button class="secondary-button" type="button" :disabled="!notificationPrefs.enabled || !notificationPrefs.popup" @click="testInAppNotification"><svg class="icon button-icon"><use href="#i-chats"></use></svg>Test in-app banner</button></div>
@@ -359,6 +366,21 @@
       </div>
     </transition>
 
+    <transition name="modal-fade">
+      <div v-if="modal === 'message' && actionMessage" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="message-actions-title" @click.self="closeModal">
+        <div class="modal-card compact action-sheet">
+          <div class="modal-header"><div><span class="eyebrow">{{ formatDay(actionMessage.time) }} · {{ formatTime(actionMessage.time) }}</span><h2 id="message-actions-title">{{ actionMessage.sender }}</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <p class="action-preview">{{ actionMessage.text }}</p>
+          <div class="action-list">
+            <button type="button" @click="copyActionMessage(false)"><svg class="icon"><use href="#i-copy"></use></svg><span>Copy message</span></button>
+            <button v-if="firstLink(actionMessage.text)" type="button" @click="copyActionMessage(true)"><svg class="icon"><use href="#i-link"></use></svg><span>Copy link</span></button>
+            <button v-if="canCompose && !actionMessage.system && !isOwnMessage(actionMessage)" type="button" @click="mentionActionSender"><svg class="icon"><use href="#i-at"></use></svg><span>Mention {{ actionMessage.sender }}</span></button>
+            <button v-if="canOpenChats && !actionMessage.system && !isOwnMessage(actionMessage) && selectedConversation && selectedConversation.id !== actionMessage.sender" type="button" @click="messageActionSender"><svg class="icon"><use href="#i-user"></use></svg><span>Message {{ actionMessage.sender }} directly</span></button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
     <transition-group name="toast" tag="div" class="toast-stack" aria-live="polite">
       <div v-for="toast in toasts" :key="toast.id" :class="['toast', toast.kind, {'message-toast': toast.type === 'message'}]">
         <template v-if="toast.type === 'message'">
@@ -371,6 +393,8 @@
   </div>
 
   <script src="./vue.global.prod.js"></script>
+  <script src="./bridge.js"></script>
+  <script src="./gestures.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IRCapybara</string>
+    <string name="channel_connection">Connection</string>
+    <string name="channel_connection_description">Shown while IRCapybara is connected to a server.</string>
+    <string name="channel_messages">Messages</string>
+    <string name="channel_messages_quiet">Messages (silent)</string>
+    <string name="connection_title">Connected to %1$s</string>
+    <string name="connection_title_generic">Connected</string>
+    <string name="connection_text">Tap to open IRCapybara.</string>
+    <string name="connection_disconnect">Disconnect</string>
+    <string name="open_with">Open with</string>
+</resources>

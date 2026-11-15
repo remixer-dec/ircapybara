@@ -64,6 +64,10 @@ func New() *Client {
 
 func (c *Client) Events() <-chan Event { return c.events }
 
+// Done is closed once the client has been closed or its connection ended.
+// Events that were still queued at that point may never be delivered.
+func (c *Client) Done() <-chan struct{} { return c.done }
+
 func (c *Client) Connect(ctx context.Context, cfg Config) error {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 12 * time.Second

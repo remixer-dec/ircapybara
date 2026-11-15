@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+
+# Built from ../mobile by build-core.sh
+app/libs/*.aar
+app/libs/*.jar

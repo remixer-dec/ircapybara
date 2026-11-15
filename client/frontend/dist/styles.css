@@ -600,3 +600,256 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
 }
 .attachment-restart:hover { color: var(--text); }
 .attachment-restart:active { transform: translateY(1px); }
+
+/* Shared shell chrome that only the phone layout shows. */
+.back-button, .sidebar-connect { display: none; }
+
+/* Phone layout: the sidebar and the conversation are two full-screen panes.
+   html[data-pane] says which one is showing; app.js flips it on navigation and
+   on the platform back gesture. Everything here undoes the icon-rail layout the
+   900px breakpoint applies, then sizes text and touch targets for a handset. */
+@media (max-width: 720px) {
+  html, body, #app { height: 100dvh; }
+  /* Both panes share one grid cell. The conversation slides over the list, and
+     gestures.js drags it with the finger while html[data-drag="pane"] is set.
+     visibility follows the slide so the covered pane leaves the tab order and
+     the accessibility tree once it is fully hidden. */
+  .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; transition: none; }
+  .sidebar, .workspace { grid-area: 1 / 1; }
+  .sidebar { border-right: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .workspace {
+    z-index: 2; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: -10px 0 28px rgba(15, 28, 38, .16);
+    transition: transform .24s cubic-bezier(.2, .8, .2, 1), visibility 0s linear 0s;
+    will-change: transform;
+  }
+  html:not([data-pane="chat"]) .workspace {
+    transform: translate3d(100%, 0, 0); visibility: hidden;
+    transition: transform .24s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .24s;
+  }
+  html[data-pane="chat"] .sidebar { visibility: hidden; transition: visibility 0s linear .24s; }
+  html[data-drag="pane"] .sidebar { visibility: visible; transition: none; }
+  html[data-drag="pane"] .workspace, html[data-drag="sheet"] .modal-card { transition: none; }
+
+  /* touch-action: what the browser may do with a touch before script sees it.
+     The conversation pane only pans vertically, which frees horizontal movement
+     for swipe-back. Sheet headers are drag handles. Everything keeps
+     "manipulation" from the base rule, so there is no double-tap zoom delay.
+     A scroll container hides its ancestors' touch-action from the browser's
+     pan decision, so each scroller has to carry the value itself. */
+  .workspace, .messages, .overview { touch-action: pan-y; }
+  .sidebar-scroll, .member-list, .protocol-log, .modal-card { touch-action: pan-y; }
+  .modal-header { touch-action: none; }
+  .sidebar-scroll, .overview, .member-list, .protocol-log, .modal-card { overscroll-behavior: contain; }
+
+  .server-card { min-height: 72px; padding: 12px 10px 12px 16px; flex-direction: row; justify-content: flex-start; gap: 12px; }
+  .server-copy, .identity-copy { display: flex; }
+  .server-copy strong, .identity-copy strong { font-size: 16px; }
+  .status-line, .identity-copy span { font-size: 13px; }
+  .brand-avatar.large { width: 44px; height: 40px; }
+  .server-actions { gap: 2px; }
+  .server-card .icon-button, .server-card .server-actions .icon-button,
+  .identity-card .icon-button, .icon-button { width: 42px; height: 42px; font-size: 18px; }
+  .icon-button .icon { width: 21px; height: 21px; }
+
+  .primary-nav, .nav-section { padding-left: 10px; padding-right: 10px; }
+  .section-label { min-height: 34px; padding: 0 6px 4px; justify-content: space-between; font-size: 12px; }
+  .section-label > span { display: inline; }
+  .section-label > .section-actions { display: inline-flex; gap: 4px; }
+  .section-add { width: 36px; height: 36px; }
+  .section-add .icon { width: 19px; height: 19px; }
+  .nav-row { min-height: 50px; padding: 8px 10px; justify-content: flex-start; gap: 12px; }
+  .nav-row > span:nth-child(2) { display: block; }
+  .nav-text, .nav-row > span:nth-child(2) { font-size: 16px; }
+  .nav-icon { width: 26px; }
+  .nav-icon .icon { width: 21px; height: 21px; }
+  .presence-avatar { width: 30px; height: 30px; font-size: 11px; }
+  .unread { display: inline-grid; min-width: 22px; height: 22px; font-size: 12px; }
+  .catalog-dot { display: block; width: 7px; height: 7px; }
+  .sidebar-empty { display: block; margin: 6px 8px 12px; font-size: 14px; }
+  .sidebar-connect { display: block; width: calc(100% - 16px); margin: 0 8px 10px; }
+
+  /* No hover on touch, so the leave/close control is always present. */
+  .nav-item { position: static; grid-template-columns: minmax(0, 1fr) 42px; }
+  .nav-item .nav-row { padding: 8px 10px; }
+  .nav-close, .nav-item.active .nav-close, .nav-item:hover .nav-close, .nav-item.active:hover .nav-close {
+    position: static; width: 40px; height: 40px; border-radius: 10px; opacity: .6;
+  }
+  .nav-close .icon { width: 17px; height: 17px; }
+
+  .identity-card { min-height: 68px; padding: 10px 10px 10px 16px; flex-direction: row; justify-content: flex-start; gap: 10px; }
+  .identity-avatar { width: 40px; height: 40px; }
+  .theme-button { width: auto; min-height: 42px; padding: 0 12px; font-size: 13px; }
+  .theme-switch-label { display: inline; }
+
+  .topbar { min-height: 60px; padding: 0 6px 0 4px; }
+  .back-button { display: grid; flex: none; margin-right: 2px; }
+  .conversation-mark, .protocol-button { display: none; }
+  .conversation-heading { flex: 1 1 auto; }
+  .conversation-heading h1 { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conversation-heading p { max-width: none; margin-top: 1px; font-size: 13px; }
+  .topbar-actions { margin-left: 0; padding-left: 0; gap: 0; }
+  .member-summary { min-width: 42px; min-height: 42px; margin-left: 0; padding: 0 9px; justify-content: center; }
+  .member-summary .icon { width: 20px; height: 20px; }
+  .member-summary + .topbar-actions { margin-left: 0; border-left: 0; }
+
+  .banner { margin: 8px 10px 0; padding: 10px 12px; }
+  .banner strong { font-size: 14px; }
+  .banner span { font-size: 13px; }
+
+  .messages { padding: 10px 10px 14px; scroll-behavior: auto; overscroll-behavior: contain; }
+  .message { grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; padding: 7px 4px; }
+  .message-avatar { width: 36px; height: 36px; font-size: 11px; }
+  .message-meta strong { font-size: 14.5px; }
+  .message-text { font-size: 16px; line-height: 1.42; }
+  .message-time { min-width: 0; font-size: 12px; }
+  .history-badge, .synthetic-badge { font-size: 9.5px; line-height: 15px; }
+  .day-separator { font-size: 12px; }
+
+  .attachment-card { grid-template-columns: 44px minmax(0, 1fr); max-width: none; }
+  .attachment-download { grid-column: 1 / -1; justify-content: center; }
+  .file-copy strong { font-size: 15px; }
+  .file-copy span, .transfer-progress-copy span, .transfer-progress-copy strong, .transfer-result { font-size: 13px; }
+  .transfer-result { white-space: normal; }
+  .attachment-restart { padding: 8px 0; font-size: 13px; }
+
+  .empty-state-card { padding: 24px 20px; }
+  .empty-state h2 { font-size: 20px; }
+  .empty-state p { font-size: 15px; }
+  .empty-kicker { font-size: 12px; }
+
+  .overview { padding: 14px 12px; }
+  .overview-heading { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .overview-heading p { font-size: 14px; }
+  .chat-card { min-height: 0; }
+  .chat-card-copy strong { font-size: 16px; }
+  .chat-card-copy span { font-size: 12.5px; }
+  .chat-card-copy p { margin-top: 6px; font-size: 14px; }
+
+  .composer-wrap { padding: 6px 8px 8px; }
+  .composer { min-height: 54px; padding: 6px; border-radius: 16px; }
+  .composer textarea { height: 42px; min-height: 42px; padding: 10px 6px; font-size: 16px; line-height: 22px; }
+  .composer textarea::placeholder { line-height: 22px; }
+  .attach-button, .send-button { width: 42px; height: 42px; border-radius: 12px; }
+  .composer-hint { display: none; }
+
+  .modal-backdrop { padding: 0; place-items: end stretch; background: rgba(10,18,26,.32); }
+  .modal-card, .modal-card.compact, .protocol-card, .settings-card {
+    width: 100%; max-height: 92dvh; padding: 18px 16px 16px; border-radius: 18px 18px 0 0; border-width: 1px 0 0;
+  }
+  .modal-header h2 { font-size: 21px; }
+  .eyebrow { font-size: 11.5px; }
+  .modal-copy, .security-note, .inline-feedback, .settings-intro { font-size: 14px; }
+  .modal-card label { font-size: 14px; }
+  .modal-card input { height: 48px; padding: 0 12px; font-size: 16px; }
+  .modal-card label.check-row { grid-template-columns: 24px minmax(0, 1fr); gap: 10px; padding: 11px 4px; }
+  .modal-card label.check-row input { width: 20px; height: 20px; }
+  .check-row strong, .tls-heading strong, .setting-title { font-size: 14.5px; }
+  .check-row small, .field-note, .tls-heading span, .form-error { font-size: 13px; }
+  .tls-heading { flex-direction: column; gap: 2px; }
+  .modal-actions { gap: 10px; margin-top: 12px; }
+  .primary-button, .secondary-button { min-height: 46px; padding: 0 18px; font-size: 15px; }
+  .modal-actions .primary-button, .modal-actions .secondary-button { flex: 1 1 0; }
+  .file-field .secondary-button { min-height: 48px; }
+  .detail-list > div { grid-template-columns: 96px minmax(0, 1fr); min-height: 48px; }
+  .detail-list dt { font-size: 13px; }
+  .detail-list dd { font-size: 14.5px; }
+
+  .settings-tabs button { min-height: 44px; }
+  .settings-tabs .icon { width: 20px; height: 20px; }
+  .settings-pane h3 { font-size: 17px; }
+  .segmented button { min-height: 42px; font-size: 14px; }
+  .settings-actions .secondary-button { flex: 1 1 auto; }
+
+  .member-list { max-height: 50dvh; }
+  .member-row strong { font-size: 15px; }
+  .member-row > div > span, .member-count-line, .member-empty { font-size: 13px; }
+
+  .protocol-log { height: 52dvh; }
+  .protocol-summary { font-size: 13px; }
+  .protocol-line { grid-template-columns: 34px minmax(0, 1fr); row-gap: 1px; }
+  .protocol-line time, .protocol-direction { display: none; }
+  .protocol-seq { font-size: 11px; }
+  .protocol-line code { font-size: 12.5px; }
+  .protocol-line.out code { color: var(--accent-strong); }
+
+  /* Above the composer would hide what is being typed; use the top edge. */
+  .toast-stack { top: 8px; right: 10px; bottom: auto; left: 10px; width: auto; }
+  .toast { font-size: 14px; }
+  .toast-message-copy strong { font-size: 14px; }
+  .toast-message-copy > div > span { font-size: 12px; }
+  .toast-message-copy p { font-size: 13.5px; }
+  .toast-enter-from, .toast-leave-to { transform: translateY(-5px); }
+}
+
+/* Touch baseline for every layout: no double-tap zoom (and so no tap delay), no
+   grey tap flash, and no pull-to-refresh or scroll chaining out of the app. */
+html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+body { overscroll-behavior: none; }
+.messages, .sidebar-scroll, .overview { -webkit-overflow-scrolling: touch; }
+
+/* In the mobile shell the interface is app chrome, not a document: a long press
+   opens message actions instead of starting a text selection or a callout. */
+html[data-platform="android"] .app-shell { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+html[data-platform="android"] input, html[data-platform="android"] textarea,
+html[data-platform="android"] .protocol-line code { -webkit-user-select: text; user-select: text; }
+
+/* Jump to the newest message. The anchor is a zero-height sticky row at the end
+   of the scroller, so the button floats above the composer at any height. */
+.jump-anchor { position: sticky; bottom: 0; height: 0; z-index: 3; pointer-events: none; }
+.jump-latest {
+  position: absolute; right: 2px; bottom: 6px; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+  display: grid; place-items: center; cursor: pointer; pointer-events: auto;
+  box-shadow: 0 6px 18px rgba(20, 35, 45, .16);
+  transition: transform .14s ease, background-color .14s ease;
+}
+.jump-latest:hover { background: var(--surface-2); }
+.jump-latest:active { transform: scale(.94); }
+.jump-latest .unread { position: absolute; top: -7px; right: -5px; margin: 0; }
+.jump-enter-active, .jump-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.jump-enter-from, .jump-leave-to { opacity: 0; transform: translateY(8px) scale(.9); }
+
+/* Message actions */
+.action-preview {
+  margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+  color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden;
+}
+.action-list { display: grid; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.action-list button {
+  min-height: 44px; padding: 0 13px; border: 0; background: var(--surface-2); color: var(--text);
+  display: flex; align-items: center; gap: 11px; text-align: left; cursor: pointer; font-size: 12.5px; font-weight: 600;
+}
+.action-list button + button { border-top: 1px solid var(--line); }
+.action-list button:hover { background: var(--surface-3); }
+.action-list button:active { background: var(--surface-3); }
+.action-list button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-list .icon { color: var(--muted); }
+
+@media (max-width: 720px) {
+  /* Sheets get a grab handle and follow the finger. */
+  .modal-card::before {
+    content: ""; display: block; width: 38px; height: 4px; margin: -8px auto 12px; border-radius: 999px; background: var(--line-strong);
+  }
+  .modal-card { padding-bottom: calc(16px + env(safe-area-inset-bottom)); will-change: transform; }
+  .modal-header { cursor: grab; }
+  .action-preview { font-size: 14.5px; }
+  .action-list button { min-height: 54px; padding: 0 15px; gap: 14px; font-size: 16px; }
+  .action-list .icon { width: 21px; height: 21px; }
+  .jump-latest { width: 46px; height: 46px; right: 4px; bottom: 8px; }
+  .jump-latest .icon { width: 22px; height: 22px; }
+  /* Pressed feedback replaces hover on a handset. */
+  .icon-button:active:not(:disabled), .section-add:active:not(:disabled), .nav-close:active { background: var(--surface-3); color: var(--text); }
+  .primary-button:active:not(:disabled), .secondary-button:active:not(:disabled) { transform: scale(.98); }
+}
+
+/* Touch screens keep :hover on the last tapped element; drop the hover-only
+   feedback there so rows do not stay highlighted or shifted. */
+@media (hover: none) {
+  .message:hover { background: transparent; }
+  .nav-row:hover:not(:disabled) { background: transparent; transform: none; }
+  .nav-row.active:hover:not(:disabled) { background: var(--accent-soft); }
+  .chat-card:hover { transform: none; }
+  .nav-row:active:not(:disabled), .chat-card:active { background: var(--surface-2); }
+}
