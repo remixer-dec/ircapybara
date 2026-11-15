@@ -33,7 +33,13 @@ func New() (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir = filepath.Join(dir, "IRCapybara")
+	return NewAt(filepath.Join(dir, "IRCapybara"))
+}
+
+// NewAt stores settings in dir. Mobile platforms have no per-user configuration
+// directory that os.UserConfigDir can discover, so their shells pass the
+// application's private files directory.
+func NewAt(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}

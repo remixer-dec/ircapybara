@@ -18,17 +18,15 @@
     conversations: [{ id: 'status', name: 'Home', kind: 'status', messages: [] }],
   });
 
-  function bridge() {
-    return window.go && window.go.main && window.go.main.App ? window.go.main.App : null;
-  }
+  // bridge.js hides whether Go is reached through Wails or the Android shell.
+  const native = window.IRCapybaraNative;
 
   async function invoke(method, ...args) {
-    const api = bridge();
-    if (!api || typeof api[method] !== 'function') {
-      throw new Error('Desktop bridge unavailable. Run the project through Wails.');
-    }
-    return api[method](...args);
+    return native.invoke(method, ...args);
   }
+
+  // Below this width the sidebar and the conversation are separate panes.
+  const phoneLayout = window.matchMedia('(max-width: 720px)');
 
   function errorText(err) {
     if (!err) return 'Something went wrong.';
@@ -41,6 +39,12 @@
       const snapshot = ref(blankSnapshot());
       const activeId = ref('status');
       const viewMode = ref('conversation');
+      const platform = ref(native.platform);
+      const mobilePane = ref('list');
+      const isPhone = ref(phoneLayout.matches);
+      const actionMessage = ref(null);
+      const awayFromLatest = ref(false);
+      const arrivedBelow = ref(0);
       const theme = ref('light');
       const draft = ref('');
       const modal = ref('');
@@ -113,6 +117,9 @@
       const totalUnread = computed(() => visibleConversations.value.reduce((sum, conv) => sum + (Number(unread[conv.id]) || 0), 0));
       const canReconnect = computed(() => !isConnected.value && !!String(connection.host || '').trim() && !!String(connection.nick || '').trim());
       const themeTitle = computed(() => theme.value === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      const isMobile = computed(() => platform.value !== 'desktop');
+      // On a phone the conversation is only on screen while its pane is showing.
+      const conversationVisible = computed(() => !isPhone.value || mobilePane.value === 'chat');
 
       const serverLabel = computed(() => snapshot.value.server || connection.serverLabel || connection.host || 'IRCapybara');
 
@@ -328,11 +335,7 @@
 
       function openExternalLink(url) {
         if (!/^https?:\/\//i.test(String(url || ''))) return;
-        if (window.runtime && typeof window.runtime.BrowserOpenURL === 'function') {
-          window.runtime.BrowserOpenURL(url);
-          return;
-        }
-        window.open(url, '_blank', 'noopener,noreferrer');
+        native.openExternal(url);
       }
 
       function formatBytes(value) {
@@ -463,7 +466,7 @@
       function processIncoming(conv, msg, snap) {
         if (!msg || msg.historical || msg.system || conv.kind === 'status' || String(msg.sender || '').toLowerCase() === String(snap.nick || '').toLowerCase()) return;
         const focused = document.hasFocus() && !document.hidden;
-        const activelyReading = viewMode.value === 'conversation' && activeId.value === conv.id && focused;
+        const activelyReading = viewMode.value === 'conversation' && activeId.value === conv.id && focused && conversationVisible.value;
         if (!activelyReading) unread[conv.id] = (unread[conv.id] || 0) + 1;
         if (notificationPrefs.enabled && notificationPrefs.sound && focused) playNotificationSound();
         if (!activelyReading && shouldNotify(conv, msg, snap)) {
@@ -480,6 +483,7 @@
           const messages = Array.isArray(conv.messages) ? conv.messages : [];
           const latest = messages[messages.length - 1];
           const previousId = lastMessageIds.get(conv.id);
+          if (latest && previousId && latest.id !== previousId && conv.id === activeId.value && awayFromLatest.value) arrivedBelow.value += 1;
           if (countUnread && latest && latest.id !== previousId) {
             let newMessages = [latest];
             if (previousId) {
@@ -534,6 +538,9 @@
         const conv = conversations.value.find(c => c.id === id);
         activeId.value = id;
         viewMode.value = 'conversation';
+        mobilePane.value = 'chat';
+        awayFromLatest.value = false;
+        arrivedBelow.value = 0;
         unread[id] = 0;
         if (conv && isChannel(conv) && !conv.joined && isConnected.value) {
           try {
@@ -554,10 +561,34 @@
           if (activeId.value === conv.id) {
             activeId.value = 'status';
             viewMode.value = 'conversation';
+            mobilePane.value = 'list';
           }
         } catch (err) {
           showToast(errorText(err), 'error');
         }
+      }
+
+      function openOverview() {
+        viewMode.value = 'overview';
+        mobilePane.value = 'chat';
+      }
+
+      function showList() {
+        mobilePane.value = 'list';
+      }
+
+      // Platform back gesture: close the topmost layer and report whether there
+      // was one. The captcha dialog is mandatory and cannot be dismissed.
+      function goBack() {
+        if (modal.value && modal.value !== 'captcha') {
+          closeModal();
+          return true;
+        }
+        if (isPhone.value && mobilePane.value === 'chat') {
+          showList();
+          return true;
+        }
+        return false;
       }
 
       function scrollMessages(force) {
@@ -567,6 +598,84 @@
           const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
           if (force || distance < 180) el.scrollTop = el.scrollHeight;
         });
+      }
+
+      // Tracks whether the reader has scrolled away from the newest message, so
+      // the jump control can appear and new arrivals do not yank the view.
+      function onMessagesScroll() {
+        const el = messagesEl.value;
+        if (!el) return;
+        const away = el.scrollHeight - el.scrollTop - el.clientHeight > 320;
+        awayFromLatest.value = away;
+        if (!away) arrivedBelow.value = 0;
+      }
+
+      function jumpToLatest() {
+        const el = messagesEl.value;
+        if (!el) return;
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+        arrivedBelow.value = 0;
+      }
+
+      function firstLink(text) {
+        const link = linkifyText(text).find(segment => segment.url);
+        return link ? link.url : '';
+      }
+
+      function isOwnMessage(message) {
+        return String(message?.sender || '').toLowerCase() === String(snapshot.value.nick || '').toLowerCase();
+      }
+
+      // Long-press (touch) or right-click (mouse) on a message.
+      function openMessageActions(message) {
+        if (!message || !message.text || modal.value) return;
+        actionMessage.value = message;
+        native.haptic('longpress');
+        openModal('message');
+      }
+
+      function messageFromNode(node) {
+        const id = node?.dataset?.messageId;
+        return (selectedConversation.value?.messages || []).find(m => m.id === id) || null;
+      }
+
+      async function copyText(text, done) {
+        try {
+          await native.copyText(text);
+          showToast(done);
+        } catch (_) {
+          showToast('Could not copy to the clipboard.', 'error');
+        }
+      }
+
+      function copyActionMessage(link) {
+        const message = actionMessage.value;
+        if (!message) return;
+        closeModal();
+        if (link) copyText(firstLink(message.text), 'Link copied.');
+        else copyText(message.text, 'Message copied.');
+      }
+
+      function mentionActionSender() {
+        const message = actionMessage.value;
+        if (!message) return;
+        closeModal();
+        const prefix = `${message.sender}: `;
+        if (!draft.value.startsWith(prefix)) draft.value = prefix + draft.value;
+        normalizeDraft();
+        nextTick(() => messageInput.value?.focus());
+      }
+
+      async function messageActionSender() {
+        const message = actionMessage.value;
+        if (!message) return;
+        closeModal();
+        try {
+          await invoke('OpenDirectMessage', message.sender);
+          openConversation(message.sender);
+        } catch (err) {
+          showToast(errorText(err), 'error');
+        }
       }
 
       function scrollProtocol() {
@@ -839,7 +948,7 @@
         if (state.status === 'queued') return 'Queued';
         if (state.status === 'verifying') return 'Verifying';
         if (state.status === 'verified') return 'Finishing';
-        if (state.status === 'complete') return 'Show in Folder';
+        if (state.status === 'complete') return isMobile.value ? 'Open' : 'Show in Folder';
         if (state.status === 'interrupted' || state.status === 'retry-available') return 'Retry';
         if (state.status === 'expired' || state.status === 'unauthorized') return 'Unavailable';
         return 'Download';
@@ -847,7 +956,7 @@
 
       function transferButtonIcon(attachment) {
         const state = transferState(attachment);
-        if (state.status === 'complete') return 'folder';
+        if (state.status === 'complete') return isMobile.value ? 'arrow-up-right' : 'folder';
         if (state.status === 'interrupted' || state.status === 'retry-available') return 'refresh';
         return 'download';
       }
@@ -886,7 +995,7 @@
         if (!update || !update.fileId) return;
         const previous = downloadStates[update.fileId];
         downloadStates[update.fileId] = { ...update };
-        if (update.status === 'complete' && previous?.status !== 'complete') showToast('Download complete. The file is ready in its saved folder.', 'success', 4800);
+        if (update.status === 'complete' && previous?.status !== 'complete') showToast(isMobile.value ? 'Download complete. The file is in your Downloads folder.' : 'Download complete. The file is ready in its saved folder.', 'success', 4800);
         if (update.status === 'retry-available' && previous?.status !== 'retry-available') showToast(update.error || 'Download needs attention. Retry is available.', 'error', 5200);
         if ((update.status === 'expired' || update.status === 'unauthorized') && previous?.status !== update.status) showToast(update.error || 'This attachment is no longer available.', 'error', 5200);
       }
@@ -904,6 +1013,7 @@
         const next = value === 'dark' ? 'dark' : 'light';
         document.documentElement.dataset.theme = next;
         document.documentElement.style.colorScheme = next;
+        native.setChrome({ dark: next === 'dark' });
       }
 
       async function toggleTheme() {
@@ -912,7 +1022,7 @@
         applyTheme(next);
         try { window.localStorage?.setItem('ircapybara.theme', next); } catch (_) {}
         try {
-          if (bridge()?.SetTheme) await invoke('SetTheme', next);
+          if (native.available()) await invoke('SetTheme', next);
         } catch (err) {
           showToast(errorText(err), 'error');
         }
@@ -929,12 +1039,7 @@
 
       async function copyProtocolLog() {
         const text = protocolTrace.value.map(e => `#${e.seq} ${formatTraceTime(e.time)} ${e.direction === 'out' ? 'OUT' : 'IN'} ${e.line}`).join('\n');
-        try {
-          await navigator.clipboard.writeText(text);
-          showToast('Protocol log copied.');
-        } catch (_) {
-          showToast('Could not copy the protocol log.', 'error');
-        }
+        await copyText(text, 'Protocol log copied.');
       }
 
       function loadNotificationPrefs() {
@@ -993,7 +1098,7 @@
       }
 
       async function verifyCompletedDownloads() {
-        if (!bridge()) return;
+        if (!native.available()) return;
         const ids = Object.keys(downloadStates).filter(id => downloadStates[id]?.status === 'complete');
         for (const fileId of ids) {
           try {
@@ -1029,7 +1134,7 @@
         loadNotificationPrefs();
         loadAppearancePrefs();
         try {
-          if (!bridge()) {
+          if (!native.available()) {
             applySnapshot(blankSnapshot(), false);
             try {
               const saved = window.localStorage?.getItem('ircapybara.theme');
@@ -1052,7 +1157,14 @@
             theme.value = result.settings.theme === 'dark' ? 'dark' : 'light';
             applyTheme(theme.value);
           }
+          if (result?.platform) platform.value = result.platform;
+          // The shell can outlive the page (the Android activity is recreated
+          // while the Go core keeps its session), so restore transfer state too.
+          for (const update of result?.transfers || []) {
+            if (update && update.fileId) downloadStates[update.fileId] = { ...update };
+          }
           applySnapshot(result?.snapshot || blankSnapshot(), false);
+          if (isMobile.value && !isConnected.value && !connection.host) openModal('connect');
           if (notificationPrefs.enabled && notificationPrefs.system) {
             window.setTimeout(() => {
               invoke('PrepareSystemNotifications').then(allowed => {
@@ -1066,21 +1178,43 @@
       }
 
       watch(theme, applyTheme, { immediate: true });
+      watch(platform, value => { document.documentElement.dataset.platform = value; }, { immediate: true });
+      watch(mobilePane, value => { document.documentElement.dataset.pane = value; }, { immediate: true });
+      // Returning to a conversation pane counts as reading it.
+      watch(conversationVisible, visible => {
+        if (visible && viewMode.value === 'conversation') {
+          unread[activeId.value] = 0;
+          scrollMessages(true);
+        }
+      });
       watch(notificationPrefs, saveNotificationPrefs, { deep: true });
       watch(appearancePrefs, saveAppearancePrefs, { deep: true });
 
       onMounted(async () => {
         await bootstrap();
-        const eventsOn = window.runtime && typeof window.runtime.EventsOn === 'function' ? window.runtime.EventsOn.bind(window.runtime) : null;
-        if (eventsOn) {
-          eventCancels.push(eventsOn('ircapybara:state', next => applySnapshot(next, true)));
-          eventCancels.push(eventsOn('ircapybara:transfer', handleTransferUpdate));
-          eventCancels.push(eventsOn('ircapybara:trace', entry => {
-            protocolTrace.value.push(entry);
-            if (protocolTrace.value.length > 300) protocolTrace.value.splice(0, protocolTrace.value.length - 300);
-            if (modal.value === 'protocol') scrollProtocol();
-          }));
-        }
+        eventCancels.push(native.on('ircapybara:state', next => applySnapshot(next, true)));
+        eventCancels.push(native.on('ircapybara:transfer', handleTransferUpdate));
+        eventCancels.push(native.on('ircapybara:trace', entry => {
+          protocolTrace.value.push(entry);
+          if (protocolTrace.value.length > 300) protocolTrace.value.splice(0, protocolTrace.value.length - 300);
+          if (modal.value === 'protocol') scrollProtocol();
+        }));
+        native.onBack(goBack);
+        eventCancels.push(window.IRCapybaraGestures.install({
+          canSwipeBack: () => isPhone.value && mobilePane.value === 'chat' && !modal.value,
+          onSwipeBack: () => { native.haptic('tap'); showList(); },
+          canDismissSheet: () => isPhone.value && !!modal.value && modal.value !== 'captcha',
+          onDismissSheet: closeModal,
+          onLongPress: node => openMessageActions(messageFromNode(node)),
+        }));
+        // The on-screen keyboard shrinks the layout; keep the newest message in
+        // view when the reader was already at the bottom.
+        const keepLatestVisible = () => { if (!awayFromLatest.value) scrollMessages(true); };
+        window.addEventListener('resize', keepLatestVisible);
+        eventCancels.push(() => window.removeEventListener('resize', keepLatestVisible));
+        const syncLayout = () => { isPhone.value = phoneLayout.matches; };
+        phoneLayout.addEventListener('change', syncLayout);
+        eventCancels.push(() => phoneLayout.removeEventListener('change', syncLayout));
         document.addEventListener('pointerdown', unlockNotificationAudio, { passive: true });
         const syncFocus = () => {
           const wasFocused = appFocused.value;
@@ -1106,7 +1240,7 @@
       });
 
       return {
-        snapshot, activeId, viewMode, theme, draft, modal, formError, busy, settingsTab, memberLoading, appFocused,
+        snapshot, activeId, viewMode, platform, isMobile, mobilePane, actionMessage, awayFromLatest, arrivedBelow, theme, draft, modal, formError, busy, settingsTab, memberLoading, appFocused,
         identityNick, identityPassword, captchaAnswer, chatTarget, helpTopic,
         connection, messagesEl, messageInput, protocolEl, unread, downloadStates, toasts,
         protocolTrace, notificationPrefs, appearancePrefs,
@@ -1117,7 +1251,8 @@
         headerIcon, emptyTitle, emptyCopy, composerPlaceholder, composerHint, banner,
         compactCount, avatarLetters, capybaraAvatar, kindLabel, conversationIcon, formatTime, formatTraceTime,
         showDaySeparator, formatDay, linkifyText, openExternalLink, formatBytes, fileBadge, lastPreview,
-        openConversation, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
+        openConversation, openOverview, showList, onMessagesScroll, jumpToLatest, firstLink, isOwnMessage,
+        openMessageActions, copyActionMessage, mentionActionSender, messageActionSender, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
         solveCaptcha, openChat, requestHistory, refreshChannels, requestHelp, resetAI, normalizeDraft,
         sendMessage, pickAndUpload, downloadAttachment, restartAttachment, transferState, transferIsBusy, transferStatusLabel, transferButtonLabel, transferButtonIcon, pickTLSCertificate, toggleTheme,
         openProtocolLog, copyProtocolLog, systemNotificationChanged, testNotificationSound, testInAppNotification, bannerAction,

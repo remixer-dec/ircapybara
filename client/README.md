@@ -1,6 +1,6 @@
-# IRCapybara Desktop Client
+# IRCapybara Client
 
-A desktop-first IRCapybara client built with Go + Wails and a dependency-light Vue frontend. The UI follows the supplied Slack/Discord/Telegram-inspired direction while keeping the IRC layer completely behind friendly actions.
+The IRCapybara client for desktop (Go + Wails) and Android (the same Go core through gomobile, in a thin Kotlin web-view wrapper), sharing one dependency-light Vue frontend. The UI follows the supplied Slack/Discord/Telegram-inspired direction while keeping the IRC layer completely behind friendly actions.
 
 The frontend does not use npm, a bundler, or a component framework. Vue 3.5.13 is vendored as one local production JS file and everything else is plain HTML/CSS/JS. The Go core uses only the standard library; Wails is the desktop shell dependency.
 
@@ -9,8 +9,11 @@ The frontend does not use npm, a bundler, or a component framework. Vue 3.5.13 i
 The protocol boundary is deliberately kept away from rendering and from server implementation details:
 
 ```text
-main.go / app.go                 Wails shell + UI orchestration
-frontend/                        rendering and interaction only
+main.go / app.go / desktop_host.go   desktop shell: Wails window, dialogs, notifications
+mobile/                              Android binding: gomobile-friendly API over the core
+android/                             Android shell: Kotlin web view, pickers, service
+frontend/                            rendering and interaction only, shared by both shells
+internal/core/                       the client itself: session orchestration and the frontend API
 internal/transport/              TLS socket, bounded large-line reader/writer
 internal/protocol/               generic IRCv3 parser
 internal/session/                connection/auth/captcha state only
@@ -20,6 +23,17 @@ internal/persist/                non-secret local settings
 ```
 
 No server package is imported and no server-internal type is referenced. The wire protocol is the boundary.
+
+### One core, two shells
+
+`internal/core` contains everything that used to live in the Wails `App`: connection lifecycle, capability negotiation, message handling, transfers. It has no UI toolkit dependency. What it needs from the platform is the `core.Host` interface (emit an event to the frontend, pick a file, choose where a download goes, show a notification), and each shell implements that:
+
+- Desktop: `desktop_host.go` implements `core.Host` with the Wails runtime. `App` embeds `*core.App`, so every exported core method is bound as `window.go.main.App.*`.
+- Android: `mobile/` wraps the core in a `Bridge` whose API uses only types gomobile can carry. `Bridge.Invoke(method, argsJSON)` dispatches to the same exported core methods by name, so a method added to the core is available to both shells without further glue. The Kotlin `AndroidHost` implements the platform side.
+
+Every exported method on `core.App` is therefore part of the frontend API. Keep helpers unexported.
+
+The frontend reaches Go only through `frontend/dist/bridge.js` (`IRCapybaraNative.invoke`, `.on`, and a few platform services), which detects the shell at load time. `app.js` contains no Wails- or Android-specific calls.
 
 ## Implemented behavior
 
@@ -41,9 +55,21 @@ No server package is imported and no server-internal type is referenced. The wir
 
 The code deliberately does not invent future syntax for richer rendering, message IDs, E2EE, reactions, replies, resumable transfers, or future transports. Those can be added behind explicit negotiated capabilities later.
 
-## Build
+## Android
 
-Prerequisites: Go 1.25+ and Wails v2 tooling for the desktop platform.
+See [android/README.md](android/README.md) for building the app. In short: `android/build-core.sh` compiles `mobile/` into `android/app/libs/ircapybara.aar`, and the Gradle project packages it with the files in `frontend/dist/`.
+
+Below 720 px the frontend switches to a phone layout: the conversation list and the open conversation are separate full-screen panes with a slide transition. Touch behaviour lives in `frontend/dist/gestures.js` and the `touch-action` rules in `styles.css`:
+
+- swipe right on a conversation, or the system back gesture, returns to the list;
+- dialogs are bottom sheets that can be dragged down by their header to dismiss;
+- press and hold a message for actions (copy, copy link, mention, message directly); right-click does the same on desktop;
+- a jump-to-latest button appears when scrolled up and counts messages that arrive meanwhile;
+- opening the keyboard keeps the newest message in view.
+
+## Build (desktop)
+
+Prerequisites: Go 1.27+ and Wails v2 tooling for the desktop platform.
 
 ```bash
 go mod tidy
@@ -66,8 +92,10 @@ go test ./internal/...
 Frontend syntax check:
 
 ```bash
-node --check frontend/app.js
+node --check frontend/dist/app.js
 ```
+
+`internal/core` is tested end to end against an in-process TLS IRC server (registration, messaging, remote and local disconnects, the connection probe, and an attachment download published through the host). `mobile` tests the by-name dispatch and the coalescing of state events.
 
 The test suite covers tagged/unknown/large IRC parsing, bounded transport lines, queue-overflow behavior, conversation history bounds, filename sanitisation, and attachment hash verification.
 
@@ -77,4 +105,6 @@ All server/plugin/message content is treated as untrusted text. The Vue template
 
 ## Current scope
 
-This is the desktop implementation. The reusable protocol/session/conversation/transfer packages are pure Go and do not depend on Wails; there is no `import "C"` or CGO code in IRCapybara itself. The Wails-specific shell and native dialogs stay at the application boundary (Wails can still have platform-native build requirements on some operating systems). A later gomobile shell can reuse those core packages without importing the desktop renderer.
+The core packages are pure Go; there is no `import "C"` or CGO code in IRCapybara itself. The Wails shell and the Android shell stay at the application boundary (both have platform-native build requirements of their own).
+
+The plan for IRCv3 support, including what it changes in this client, is in [../docs/IRCV3.md](../docs/IRCV3.md).
