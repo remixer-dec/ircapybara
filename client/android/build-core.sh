@@ -3,6 +3,7 @@
 #
 # Needs: Go, the Android SDK with an NDK installed (ANDROID_HOME set), and a JDK.
 # gomobile and gobind are installed at the versions pinned in ../go.mod.
+# Pass android/arm,android/arm64 to build only the release architectures.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -15,9 +16,10 @@ gomobile init
 
 mkdir -p android/app/libs
 gomobile bind \
-    -target=android \
+    -target="${1:-android}" \
     -androidapi 24 \
     -javapkg=io.ircapybara \
+    -trimpath \
     -ldflags="-s -w" \
     -o android/app/libs/ircapybara.aar \
     ./mobile

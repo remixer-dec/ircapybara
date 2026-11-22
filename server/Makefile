@@ -7,7 +7,7 @@ vet:
 	go vet ./...
 
 build:
-	CGO_ENABLED=0 go build -trimpath -o ircapybara ./cmd/ircapybara
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ircapybara ./cmd/ircapybara
 
 docker:
 	docker compose build ircapybara

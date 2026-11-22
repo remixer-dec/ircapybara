@@ -19,10 +19,15 @@ android {
 
     buildTypes {
         release {
-            // The gomobile runtime is reached through JNI by name; keep R8 off
-            // until keep rules for it are added.
-            isMinifyEnabled = false
+            ndk.abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+    }
+
+    packaging {
+        jniLibs.useLegacyPackaging = true
     }
 
     compileOptions {
@@ -30,9 +35,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // The web frontend is not copied: the APK packages the same files the
-    // desktop shell embeds. They end up under assets/dist/.
+    // Package the desktop frontend under assets/dist for the fixed WebView origin.
     sourceSets["main"].assets.srcDir(rootProject.file("../frontend"))
+    sourceSets["main"].assets.exclude("dist/assets/capybara/README.md")
 }
 
 kotlin {

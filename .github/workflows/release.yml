@@ -122,7 +122,7 @@ jobs:
           export PATH="$JAVA_HOME/bin:$PATH"
           # Use the runner's NDK r29 for 16 KiB native library alignment.
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-          ./build-core.sh
+          ./build-core.sh android/arm,android/arm64
           gradle --no-daemon :app:assembleRelease
       - name: Prepare release APK
         env:
@@ -132,27 +132,38 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           unsigned=app/build/outputs/apk/release/app-release-unsigned.apk
-          if [[ -z "$ANDROID_KEYSTORE_BASE64$ANDROID_KEYSTORE_PASSWORD$ANDROID_KEY_ALIAS$ANDROID_KEY_PASSWORD" ]]; then
-            echo '::warning::Android signing secrets are unset. Publishing an unsigned release APK.'
-            mv "$unsigned" IRCapybara-client-android-unsigned.apk
-            exit 0
-          fi
-
-          : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 secret}"
-          : "${ANDROID_KEYSTORE_PASSWORD:?Set the ANDROID_KEYSTORE_PASSWORD secret}"
-          : "${ANDROID_KEY_ALIAS:?Set the ANDROID_KEY_ALIAS secret}"
-          export ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
           export JAVA_HOME="$JAVA_HOME_17_X64"
           build_tools="$ANDROID_HOME/build-tools/35.0.0"
           signing_dir=$(mktemp -d "$RUNNER_TEMP/android-signing.XXXXXX")
           trap 'rm -rf -- "$signing_dir"' EXIT
-          base64 --decode <<< "$ANDROID_KEYSTORE_BASE64" > "$signing_dir/release.keystore"
           "$build_tools/zipalign" -P 16 4 "$unsigned" "$signing_dir/aligned.apk"
-          "$build_tools/apksigner" sign \
-            --ks "$signing_dir/release.keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
-            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
-            --out IRCapybara-client-android.apk "$signing_dir/aligned.apk"
-          "$build_tools/apksigner" verify IRCapybara-client-android.apk
+
+          if [[ -z "$ANDROID_KEYSTORE_BASE64$ANDROID_KEYSTORE_PASSWORD$ANDROID_KEY_ALIAS$ANDROID_KEY_PASSWORD" ]]; then
+            echo '::warning::Android signing secrets are unset. Signing with the public AOSP testkey.'
+            output=IRCapybara-client-android-testkey.apk
+            key_base='https://android.googlesource.com/platform/build/+/refs/tags/android-16.0.0_r1/target/product/security'
+            for file in testkey.pk8 testkey.x509.pem; do
+              curl -fsSL --retry 3 --max-time 30 "$key_base/$file?format=TEXT" |
+                base64 --decode > "$signing_dir/$file"
+            done
+            sha256sum --check <<EOF
+          495675d32e89a149d5abe191f4e9c0e218b9068714e9b53a7c91e164a0741a23  $signing_dir/testkey.pk8
+          a4384ba815b9499a5ce349b4e33c1755278873fe2eac150a068823f526e6dbde  $signing_dir/testkey.x509.pem
+          EOF
+            signer=(--key "$signing_dir/testkey.pk8" --cert "$signing_dir/testkey.x509.pem")
+          else
+            : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 secret}"
+            : "${ANDROID_KEYSTORE_PASSWORD:?Set the ANDROID_KEYSTORE_PASSWORD secret}"
+            : "${ANDROID_KEY_ALIAS:?Set the ANDROID_KEY_ALIAS secret}"
+            export ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+            output=IRCapybara-client-android.apk
+            base64 --decode <<< "$ANDROID_KEYSTORE_BASE64" > "$signing_dir/release.keystore"
+            signer=(--ks "$signing_dir/release.keystore" --ks-key-alias "$ANDROID_KEY_ALIAS"
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD)
+          fi
+
+          "$build_tools/apksigner" sign "${signer[@]}" --out "$output" "$signing_dir/aligned.apk"
+          "$build_tools/apksigner" verify "$output"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: IRCapybara-client-android

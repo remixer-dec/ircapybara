@@ -4,16 +4,16 @@ A thin Kotlin wrapper around two shared pieces: the Go client core (`../mobile`,
 
 ## Release APK
 
-Pushing a tag builds the Android release APK alongside the desktop clients and server. Download `IRCapybara-client-android.apk` from the GitHub release’s **Assets**.
+Pushing a tag builds the Android release APK alongside the desktop clients and server. The APK supports 32-bit and 64-bit ARM devices. Download it from the GitHub release’s **Assets**.
 
-To publish an installable APK, configure these repository Actions secrets. Use the same signing key across releases so users can install updates over an existing copy.
+To publish `IRCapybara-client-android.apk` with your own signing key, configure these repository Actions secrets. Use the same signing key across releases so users can install updates over an existing copy.
 
 - `ANDROID_KEYSTORE_BASE64` contains the release keystore encoded in Base64.
 - `ANDROID_KEYSTORE_PASSWORD` unlocks the keystore.
 - `ANDROID_KEY_ALIAS` selects the signing key.
 - `ANDROID_KEY_PASSWORD` is needed only if the key has a different password from the keystore.
 
-With no signing secrets, the workflow publishes `IRCapybara-client-android-unsigned.apk`, which must be signed before installation. See [Android’s command line signing guide](https://developer.android.com/build/building-cmdline#sign_cmdline).
+With no signing secrets, the workflow publishes `IRCapybara-client-android-testkey.apk`, signed with the public Android Open Source Project testkey. Use it for testing, since anyone can sign an APK with that key. Switching to a private signing key requires uninstalling the testkey build first.
 
 ## Build
 
@@ -27,7 +27,7 @@ Prerequisites: Go 1.27+, a JDK (17 or newer), and the Android SDK with an NDK in
 gradle :app:assembleDebug
 ```
 
-The first command installs `gomobile` and `gobind` at the versions pinned in `../go.mod` and writes `app/libs/ircapybara.aar`. Re-run it whenever Go code changes. Frontend changes need only the Gradle build.
+The first command installs `gomobile` and `gobind` at the versions pinned in `../go.mod` and writes `app/libs/ircapybara.aar`. Re-run it whenever Go code changes. Frontend changes need only the Gradle build. For a release build, use `./build-core.sh android/arm,android/arm64` and `gradle :app:assembleRelease`.
 
 Minimum Android version is 7.0 (API 24). Update Android System WebView to the newest version available for the device.
 
@@ -56,5 +56,3 @@ ConnectionService  foreground service that exists while a server session does
 
 - Notification policy (which messages notify, unread counts) lives in the page. If Android destroys the activity while the service keeps the connection, messages arrive but do not notify until the app is opened. Moving that policy into the core is planned with read markers (see `../../docs/IRCV3.md`, phase 4).
 - No automatic reconnect: passwords are never stored, so a dropped session needs the user to reconnect.
-- Release builds have code shrinking off; the gomobile runtime needs keep rules before R8 can be enabled.
-- The launcher icon is a placeholder.
