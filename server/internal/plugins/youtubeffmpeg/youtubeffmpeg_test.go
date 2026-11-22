@@ -71,16 +71,32 @@ func TestYouTubeURLAllowlist(t *testing.T) {
 	}
 }
 
-func TestChooseFormatStaysInsideLimit(t *testing.T) {
+func TestChooseSourcePlanStaysInsideLimits(t *testing.T) {
 	formats := youtube.FormatList{
 		{MimeType: "video/mp4", AudioChannels: 2, ContentLength: 4_000_000, Width: 640, Height: 360, Bitrate: 1},
 		{MimeType: "video/mp4", AudioChannels: 2, ContentLength: 14_000_000, Width: 1280, Height: 720, Bitrate: 2},
 		{MimeType: "video/mp4", AudioChannels: 2, ContentLength: 40_000_000, Width: 1920, Height: 1080, Bitrate: 3},
 		{MimeType: "video/webm", AudioChannels: 2, ContentLength: 1_000_000, Width: 3840, Height: 2160, Bitrate: 4},
 	}
-	f := chooseFormat(formats, 15_000_000)
-	if f == nil || f.Width != 1280 {
-		t.Fatalf("unexpected format: %#v", f)
+	tests := []struct {
+		name            string
+		sourceBudget    int64
+		attachmentLimit int64
+	}{
+		{"source budget", 15_000_000, 50_000_000},
+		{"attachment limit", 50_000_000, 15_000_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := chooseSourcePlan(formats, tt.sourceBudget, tt.attachmentLimit, 0, intentAV, "mp4")
+			if plan == nil || len(plan.items) != 1 {
+				t.Fatalf("expected one source stream, got %+v", plan)
+			}
+			item := plan.items[0]
+			if item.role != roleCombined || item.format.MimeType != "video/mp4" || item.format.Width != 1280 {
+				t.Fatalf("expected a combined 720p MP4 stream, got %+v", item)
+			}
+		})
 	}
 }
 
