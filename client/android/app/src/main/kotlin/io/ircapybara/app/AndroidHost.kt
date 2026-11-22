@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import io.ircapybara.mobile.Host
@@ -66,6 +67,8 @@ class AndroidHost(private val app: IRCapybaraApp) : Host {
     }
 
     override fun publishDownload(path: String, name: String, mime: String): String {
+        // On older Android versions the Open action exports the file through the system picker.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return path
         val source = File(path)
         val resolver = app.contentResolver
         val values = ContentValues().apply {
@@ -101,22 +104,44 @@ class AndroidHost(private val app: IRCapybaraApp) : Host {
     }
 
     override fun openFile(location: String, mime: String) {
-        val uri = Uri.parse(location)
-        if (uri.scheme != "content") throw IOException("this download is not in shared storage")
+        val current = requireActivity()
+        val parsed = Uri.parse(location)
+        val uri = when (parsed.scheme) {
+            "content" -> parsed
+            null -> saveDownload(current, File(location), mime) ?: return
+            else -> throw IOException("this download could not be opened")
+        }
         val type = app.contentResolver.getType(uri) ?: mime.ifBlank { "*/*" }
         val view = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, type)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val current = requireActivity()
         current.runOnUiThread {
             try {
                 // Always a chooser: the file came from the network, so the user
                 // decides what handles it.
                 current.startActivity(Intent.createChooser(view, current.getString(R.string.open_with)))
             } catch (_: ActivityNotFoundException) {
-                // Nothing can open this type; it stays available in Downloads/IRCapybara.
+                // Nothing can open this type; the saved file is still available.
             }
         }
+    }
+
+    private fun saveDownload(current: MainActivity, source: File, mime: String): Uri? {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(mime.ifBlank { "application/octet-stream" })
+            .putExtra(Intent.EXTRA_TITLE, source.name)
+        val uri = current.pickDocument(intent) ?: return null
+        if (uri.scheme != "content") throw IOException("invalid save location")
+        val resolver = app.contentResolver
+        try {
+            val output = resolver.openOutputStream(uri) ?: throw IOException("could not create the saved file")
+            output.use { out -> source.inputStream().use { it.copyTo(out) } }
+        } catch (e: Exception) {
+            runCatching { DocumentsContract.deleteDocument(resolver, uri) }
+            throw e
+        }
+        return uri
     }
 
     override fun chooseCertificate(): String {
@@ -137,6 +162,7 @@ class AndroidHost(private val app: IRCapybaraApp) : Host {
         return current.requestNotificationPermission()
     }
 
+    @Suppress("DEPRECATION")
     override fun showNotification(title: String, subtitle: String, body: String, sound: Boolean) {
         if (!notifications.areNotificationsEnabled()) throw IOException("notifications are turned off for IRCapybara")
         val open = PendingIntent.getActivity(
@@ -145,8 +171,15 @@ class AndroidHost(private val app: IRCapybaraApp) : Host {
             Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val channel = if (sound) IRCapybaraApp.CHANNEL_MESSAGES else IRCapybaraApp.CHANNEL_MESSAGES_QUIET
-        val notification = Notification.Builder(app, channel)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = if (sound) IRCapybaraApp.CHANNEL_MESSAGES else IRCapybaraApp.CHANNEL_MESSAGES_QUIET
+            Notification.Builder(app, channel)
+        } else {
+            Notification.Builder(app)
+                .setPriority(if (sound) Notification.PRIORITY_HIGH else Notification.PRIORITY_LOW)
+                .setDefaults(if (sound) Notification.DEFAULT_SOUND else 0)
+        }
+        val notification = builder
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)

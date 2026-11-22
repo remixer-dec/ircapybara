@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Build
 import io.ircapybara.mobile.Bridge
 import io.ircapybara.mobile.Mobile
 import java.io.File
@@ -45,6 +46,7 @@ class IRCapybaraApp : Application() {
     }
 
     private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_CONNECTION, getString(R.string.channel_connection), NotificationManager.IMPORTANCE_LOW).apply {

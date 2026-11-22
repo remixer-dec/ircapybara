@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"ircapybara/client/frontend"
@@ -154,6 +155,9 @@ type App struct {
 	capEnded             bool
 	capLSComplete        bool
 	capOffered           map[string]bool
+	capEnabled           map[string]bool
+	multiline            multilineLimits
+	batches              map[string]*receivedBatch
 	historyPending       map[string]historyRequest
 	profiles             map[string]UserProfile
 
@@ -202,6 +206,7 @@ func New(opts Options) *App {
 		attachments:      map[string]attachmentMeta{},
 		namesMembers:     map[string][]conversation.Member{},
 		capOffered:       map[string]bool{},
+		capEnabled:       map[string]bool{},
 		historyPending:   map[string]historyRequest{},
 		profiles:         map[string]UserProfile{},
 		transferStates:   map[string]TransferUpdate{},
@@ -360,6 +365,7 @@ func (a *App) Connect(cfg ConnectionConfig) error {
 	a.capLSComplete = false
 	a.capOffered = map[string]bool{}
 	a.historyPending = map[string]historyRequest{}
+	a.resetChatCapabilities()
 	a.profiles = map[string]UserProfile{}
 	gen := a.generation + 1
 	a.generation = gen
@@ -473,6 +479,7 @@ func (a *App) Disconnect() error {
 	a.identifySent = false
 	a.pendingAutoJoin = nil
 	a.historyPending = map[string]historyRequest{}
+	a.resetChatCapabilities()
 	a.capEnded = false
 	a.cfg.ServerPassword = ""
 	a.cfg.IdentityPassword = ""
@@ -504,17 +511,34 @@ func (a *App) SendMessage(target, text string) error {
 	if !validIRCAtom(target) {
 		return errors.New("invalid conversation target")
 	}
+	text = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(text)
+	if !utf8.ValidString(text) || strings.IndexFunc(text, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) >= 0 {
+		return errors.New("invalid chat text")
+	}
 	if text == "" {
 		return errors.New("message is empty")
 	}
 	if utf8.RuneCountInString(text) > 32768 {
 		return errors.New("message exceeds 32,768 Unicode characters")
 	}
-	line := "PRIVMSG " + target + " :" + protocol.EncodeMessageText(text)
-	if len(line)+2 > transport.MaxLineBytes {
-		return errors.New("encoded IRC line exceeds transport limit")
+	a.mu.Lock()
+	c, legacy := a.client, a.coreAdvertised
+	var limits multilineLimits
+	if a.capEnabled["batch"] && a.capEnabled["draft/multiline"] {
+		limits = a.multiline
 	}
-	if err := a.send(line); err != nil {
+	a.mu.Unlock()
+	if c == nil {
+		return errors.New("not connected")
+	}
+	lines, err := outgoingChat(target, text, strconv.FormatUint(a.msgSeq.Add(1), 36), limits, legacy)
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		a.traceProtocol("out", redactProtocolLine(line))
+	}
+	if err := c.SendLines(lines); err != nil {
 		return err
 	}
 
@@ -697,7 +721,9 @@ func (a *App) RequestHistory(target string, limit int) error {
 	if a.historyPending == nil {
 		a.historyPending = map[string]historyRequest{}
 	}
-	a.historyPending[strings.ToLower(target)] = historyRequest{Until: time.Now().Add(1500 * time.Millisecond), Remaining: count}
+	if !(a.capEnabled["ircapybara/history"] && a.capOffered["draft/multiline"]) {
+		a.historyPending[strings.ToLower(target)] = historyRequest{Until: time.Now().Add(1500 * time.Millisecond), Remaining: count}
+	}
 	a.mu.Unlock()
 	line := "HISTORY " + target
 	if limit != 0 {
@@ -1003,6 +1029,7 @@ func (a *App) dropConnection(c *transport.Client, gen uint64, reason string) {
 	a.identifySent = false
 	a.pendingAutoJoin = nil
 	a.historyPending = map[string]historyRequest{}
+	a.resetChatCapabilities()
 	a.cfg.ServerPassword = ""
 	a.cfg.IdentityPassword = ""
 	a.mu.Unlock()
@@ -1026,6 +1053,10 @@ func (a *App) handleLine(line string) {
 		return
 	}
 
+	msg, deliver := a.receiveBatch(msg)
+	if !deliver {
+		return
+	}
 	switch msg.Command {
 	case "PING":
 		if len(msg.Params) > 0 {
@@ -1255,7 +1286,13 @@ func (a *App) handleLine(line string) {
 	case "PRIVMSG":
 		a.handlePrivmsg(msg)
 	case "NOTICE":
-		a.handleNotice(msg)
+		if msg.Prefix != nil && (msg.Prefix.User != "" || msg.Tags["ircapybara-history"] == "1") {
+			a.handlePrivmsg(msg)
+		} else {
+			a.handleNotice(msg)
+		}
+	case "FAIL":
+		a.addStatus("Server", strings.Join(msg.Params, " "))
 	case "XATTACH":
 		a.handleAttachment(msg)
 	case "XFER":
@@ -1326,35 +1363,26 @@ func (a *App) handleLine(line string) {
 }
 
 func (a *App) handleCAP(msg protocol.Message) {
-	idx := -1
-	sub := ""
-	for i, p := range msg.Params {
-		u := strings.ToUpper(p)
-		if u == "LS" || u == "ACK" || u == "NAK" || u == "NEW" || u == "DEL" {
-			idx, sub = i, u
-			break
-		}
-	}
-	if idx < 0 {
+	if len(msg.Params) < 3 {
 		return
 	}
+	sub := strings.ToUpper(msg.Params[1])
 	switch sub {
 	case "LS":
-		caps := ""
-		if len(msg.Params) > idx+1 {
-			caps = msg.Params[len(msg.Params)-1]
-		}
 		a.mu.Lock()
-		for _, capName := range strings.Fields(caps) {
+		for _, capName := range strings.Fields(msg.Trailing()) {
 			capName = strings.TrimPrefix(capName, "-")
 			if eq := strings.IndexByte(capName, '='); eq >= 0 {
+				if capName[:eq] == "draft/multiline" {
+					a.multiline = parseMultilineLimits(capName[eq+1:])
+				}
 				capName = capName[:eq]
 			}
 			if capName != "" && capName != "*" {
 				a.capOffered[strings.ToLower(capName)] = true
 			}
 		}
-		continuation := len(msg.Params) > idx+1 && msg.Params[idx+1] == "*"
+		continuation := len(msg.Params) > 3 && msg.Params[2] == "*"
 		if !continuation {
 			a.capLSComplete = true
 		}
@@ -1365,7 +1393,17 @@ func (a *App) handleCAP(msg protocol.Message) {
 			return
 		}
 		a.requestPreferredCapabilities()
-	case "ACK", "NAK":
+	case "ACK", "DEL":
+		a.mu.Lock()
+		for _, name := range strings.Fields(msg.Trailing()) {
+			key, _, _ := strings.Cut(strings.TrimPrefix(name, "-"), "=")
+			a.capEnabled[key] = sub == "ACK" && !strings.HasPrefix(name, "-")
+		}
+		a.mu.Unlock()
+		if sub == "ACK" {
+			a.endCAPNegotiation()
+		}
+	case "NAK":
 		a.endCAPNegotiation()
 	}
 }
@@ -1380,13 +1418,17 @@ func (a *App) requestPreferredCapabilities() {
 	for k, v := range a.capOffered {
 		offered[k] = v
 	}
+	canMultiline := offered["batch"] && a.multiline.bytes > 0
 	a.mu.Unlock()
 
-	wanted := make([]string, 0, 2)
+	wanted := make([]string, 0, 4)
 	for _, capName := range []string{"server-time", "ircapybara/history"} {
 		if offered[capName] {
 			wanted = append(wanted, capName)
 		}
+	}
+	if canMultiline {
+		wanted = append(wanted, "batch", "draft/multiline")
 	}
 	if len(wanted) == 0 {
 		a.endCAPNegotiation()
@@ -1650,6 +1692,12 @@ func (a *App) handleNotice(msg protocol.Message) {
 	}
 	text := protocol.DecodeMessageText(msg.Trailing())
 	if text == "" {
+		return
+	}
+	switch text {
+	case "IRCapybara extended mode active; rendering format v0 is passthrough",
+		"IRCapybara extension available: XMODE EXTENDED (rendering format reserved)":
+		// Older servers send these hints for each channel the client joins.
 		return
 	}
 	a.applyServerPolicyFromText(text)

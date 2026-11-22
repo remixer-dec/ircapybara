@@ -378,8 +378,8 @@ func (p *Plugin) request(messages []message) (string, string, error) {
 	if text == "" {
 		text = decoded.Choices[0].Message.Refusal
 	}
-	text = pluginutil.CleanExternalText(text, protocol.MaxMessageRunes)
-	if text == "" {
+	text = pluginutil.PlainText(text, protocol.MaxMessageRunes)
+	if strings.TrimSpace(text) == "" {
 		return "", "", errors.New("chat endpoint returned empty text")
 	}
 	return text, decoded.Model, nil

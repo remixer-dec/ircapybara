@@ -138,20 +138,21 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 		s.badParams(c, "CAP")
 		return false, ""
 	}
-	if c.Capabilities == nil {
-		c.Capabilities = make(map[string]bool)
-	}
-	const offered = "server-time ircapybara/history"
+	const offered = "server-time ircapybara/history batch draft/multiline"
 	switch {
 	case strings.HasPrefix(args, "LS"):
 		if !c.Registered {
 			c.CapNegotiating = true
 		}
-		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LS :"+offered)
+		caps := offered
+		if args == "LS 302" {
+			caps += fmt.Sprintf("=max-bytes=%d,max-lines=%d", multilineBytes, multilineLines)
+		}
+		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" LS :"+caps)
 	case args == "LIST":
 		var enabled []string
-		for _, name := range []string{"server-time", "ircapybara/history"} {
-			if c.Capabilities[name] {
+		for _, name := range strings.Fields(offered) {
+			if c.HasCaps(name) {
 				enabled = append(enabled, name)
 			}
 		}
@@ -162,7 +163,7 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 		valid := true
 		for _, item := range requested {
 			name := strings.TrimPrefix(item, "-")
-			if name != "server-time" && name != "ircapybara/history" {
+			if name != "server-time" && name != "ircapybara/history" && name != "batch" && name != "draft/multiline" {
 				valid = false
 				break
 			}
@@ -171,6 +172,10 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 			s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" NAK :"+raw)
 			return false, ""
 		}
+		c.CapMu.Lock()
+		if c.Capabilities == nil {
+			c.Capabilities = make(map[string]bool)
+		}
 		for _, item := range requested {
 			if strings.HasPrefix(item, "-") {
 				delete(c.Capabilities, strings.TrimPrefix(item, "-"))
@@ -178,6 +183,7 @@ func (s *Server) cmdCAP(c *model.Client, args string) (bool, string) {
 				c.Capabilities[item] = true
 			}
 		}
+		c.CapMu.Unlock()
 		s.sendLine(c, ":"+s.cfg.ServerName+" CAP "+s.target(c)+" ACK :"+raw)
 	case args == "END":
 		c.CapNegotiating = false
@@ -525,11 +531,6 @@ func (s *Server) joinOne(c *model.Client, name, key string) {
 		s.numeric(c, "332", ch.Name+" :"+topic)
 	}
 	s.sendNames(c, ch)
-	if c.ExtendedMode {
-		s.notice(c, "IRCapybara extended mode active; rendering format v0 is passthrough")
-	} else {
-		s.notice(c, "IRCapybara extension available: XMODE EXTENDED (rendering format reserved)")
-	}
 	for _, p := range s.plugins {
 		p.OnJoin(pluginapi.JoinEvent{Client: s.clientView(c), Channel: ch.Name})
 	}
@@ -603,7 +604,7 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 	if notice {
 		verb = "NOTICE"
 	}
-	line := fmt.Sprintf(":%s %s %s :%s", s.prefix(c), verb, event.Target, protocol.EncodeMessageText(event.Text))
+	msg := chatMessage{prefix: s.prefix(c), verb: verb, target: event.Target, text: event.Text}
 
 	if strings.HasPrefix(event.Target, "#") {
 		norm := protocol.Norm(event.Target)
@@ -640,7 +641,7 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 		}
 		s.mu.Unlock()
 		for _, member := range recipients {
-			s.sendLine(member, line)
+			s.sendChat(member, msg)
 		}
 		return false, ""
 	}
@@ -651,7 +652,7 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 		}
 		return false, ""
 	}
-	s.sendLine(target, line)
+	s.sendChat(target, msg)
 	return false, ""
 }
 
@@ -1092,8 +1093,7 @@ func (s *Server) cmdHISTORY(c *model.Client, args string) (bool, string) {
 		if item.Notice {
 			verb = "NOTICE"
 		}
-		line := fmt.Sprintf(":%s!%s@%s %s %s :%s", item.Nick, item.Username, item.Host, verb, channelName, protocol.EncodeMessageText(item.Text))
-		s.sendLine(c, line)
+		s.sendChat(c, chatMessage{prefix: item.Nick + "!" + item.Username + "@" + item.Host, verb: verb, target: channelName, text: item.Text, history: true, at: item.At})
 	}
 	return false, ""
 }
@@ -1815,7 +1815,7 @@ func (s *Server) cmdXMODE(c *model.Client, args string) (bool, string) {
 	}
 	c.ExtendedMode = args == "EXTENDED"
 	if c.ExtendedMode {
-		s.notice(c, "Extended mode enabled; rendering format v0 is passthrough; XFER/RECV attachments available")
+		s.notice(c, "Extended mode enabled for attachments")
 	} else {
 		s.notice(c, "Extended mode disabled")
 	}

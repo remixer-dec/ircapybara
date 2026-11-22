@@ -909,3 +909,35 @@ html[data-platform="android"] .protocol-line code { -webkit-user-select: text; u
   .chat-card:hover { transform: none; }
   .nav-row:active:not(:disabled), .chat-card:active { background: var(--surface-2); }
 }
+
+.markdown { --tok-comment: #58666b; --tok-string: #276536; --tok-keyword: #883665; --tok-number: #824e15; --tok-function: #215c87; --tok-builtin: #146665; }
+html[data-theme="dark"] .markdown { --tok-comment: #a0abb0; --tok-string: #9dd485; --tok-keyword: #d28ce2; --tok-number: #e4b07b; --tok-function: #7cbcff; --tok-builtin: #6bc7d6; }
+.markdown :is(p, h1, h2, h3, h4, h5, h6, ol, ul, blockquote, pre) { margin: 0; }
+.markdown :is(h1, h2, h3, h4, h5, h6) { line-height: 1.35; }
+.markdown h1 { font-size: 1.4em; }
+.markdown h2 { font-size: 1.25em; }
+.markdown :is(h3, h4, h5, h6) { font-size: 1.08em; }
+.markdown :is(ol, ul) { padding-inline-start: 2em; }
+.markdown blockquote { border-inline-start: 3px solid var(--line); padding-inline-start: .75em; }
+.markdown-blank { height: 1em; }
+.markdown code { font: .93em/1.45 ui-monospace, monospace; background: var(--surface-2); border-radius: 3px; padding: 0 .18em; }
+.markdown-code-block { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; margin: .35em 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.markdown-code-block pre { padding: .75em .9em; overflow-x: auto; white-space: pre; overflow-wrap: normal; tab-size: 4; }
+.markdown-code-block pre code { display: block; width: max-content; min-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; }
+.markdown-copy-code { margin: 3px; }
+@media (pointer: coarse) { .markdown-copy-code { width: 44px; height: 44px; } }
+.irc-token-comment { color: var(--tok-comment); }
+.markdown code::highlight(ircapybara-comment) { color: var(--tok-comment); }
+.irc-token-string { color: var(--tok-string); }
+.markdown code::highlight(ircapybara-string) { color: var(--tok-string); }
+.irc-token-keyword { color: var(--tok-keyword); }
+.markdown code::highlight(ircapybara-keyword) { color: var(--tok-keyword); }
+.irc-token-number { color: var(--tok-number); }
+.markdown code::highlight(ircapybara-number) { color: var(--tok-number); }
+.irc-token-function { color: var(--tok-function); }
+.markdown code::highlight(ircapybara-function) { color: var(--tok-function); }
+.irc-token-builtin { color: var(--tok-builtin); }
+.markdown code::highlight(ircapybara-builtin) { color: var(--tok-builtin); }
+
+.markdown pre, .markdown code { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.markdown pre { touch-action: pan-x pan-y; }

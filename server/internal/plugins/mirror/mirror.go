@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ircapybara/internal/plugins/pluginutil"
 	"ircapybara/internal/protocol"
@@ -28,7 +29,8 @@ var (
 	configEntryRE = regexp.MustCompile(`^(rss|tg)\|(#[A-Za-z0-9_-]{1,48})\|([^|;\x00-\x20]{1,512})\|(1h|24h)$`)
 	tgNameRE      = regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`)
 	tgPostRE      = regexp.MustCompile(`data-post="([A-Za-z0-9_]{5,32})/([0-9]{1,20})"`)
-	tgTextRE      = regexp.MustCompile(`(?s)<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>`)
+	tgTextRE = regexp.MustCompile(`<div class="tgme_widget_message_text[^"]*"[^>]*>`)
+ tgDivRE = regexp.MustCompile(`(?i)</?div\b[^>]*>`)
 	tgTimeRE      = regexp.MustCompile(`<time[^>]{0,512}datetime="([^"]{1,64})"`)
 )
 
@@ -266,9 +268,9 @@ func parseRSS(body []byte) ([]Post, error) {
 	}
 	var out []Post
 	for _, item := range doc.Channel.Items {
-		title := pluginutil.CleanExternalText(item.Title, 220)
+		title := pluginutil.HTMLText(item.Title, 220)
 		link := safeFeedLink(item.Link)
-		desc := pluginutil.CleanExternalText(item.Description, 220)
+		desc := pluginutil.HTMLText(item.Description, 220)
 		text := mirrorText(title, desc, link)
 		if text == "" {
 			continue
@@ -280,11 +282,11 @@ func parseRSS(body []byte) ([]Post, error) {
 		out = append(out, Post{ID: id, Text: text, At: parseFeedTime(item.PubDate)})
 	}
 	for _, item := range doc.Entries {
-		title := pluginutil.CleanExternalText(item.Title, 220)
+		title := pluginutil.HTMLText(item.Title, 220)
 		link := safeFeedLink(item.Link.Href)
-		desc := pluginutil.CleanExternalText(item.Summary, 220)
+		desc := pluginutil.HTMLText(item.Summary, 220)
 		if desc == "" {
-			desc = pluginutil.CleanExternalText(item.Content, 220)
+			desc = pluginutil.HTMLText(item.Content, 220)
 		}
 		text := mirrorText(title, desc, link)
 		if text == "" {
@@ -324,8 +326,16 @@ func parseTelegramPreview(html string) ([]Post, error) {
 		}
 		segment := html[start:end]
 		text := ""
-		if m := tgTextRE.FindStringSubmatch(segment); m != nil {
-			text = pluginutil.CleanExternalText(m[1], 300)
+		if m := tgTextRE.FindStringIndex(segment); m != nil {
+			inner := segment[m[1]:]
+			depth := 1
+			for _, tag := range tgDivRE.FindAllStringIndex(inner,-1) {
+				if inner[tag[0]+1]=='/' { depth-- } else { depth++ }
+				if depth==0 {
+					text=pluginutil.HTMLText(inner[:tag[0]],300)
+					break
+				}
+			}
 		}
 		if text == "" {
 			switch {
@@ -344,7 +354,7 @@ func parseTelegramPreview(html string) ([]Post, error) {
 			at, _ = time.Parse(time.RFC3339, m[1])
 		}
 		link := "https://t.me/" + postChannel + "/" + postID
-		text = pluginutil.CleanExternalText(text+" — "+link, 390)
+		text = mirrorText("", text, link)
 		out = append(out, Post{ID: postChannel + "/" + postID, Text: text, At: at})
 	}
 	orderPosts(out)
@@ -383,21 +393,24 @@ func safeFeedLink(raw string) string {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
 		return ""
 	}
-	return pluginutil.CleanExternalText(u.String(), 180)
+	return pluginutil.PlainText(u.String(), 180)
 }
 
 func mirrorText(title, desc, link string) string {
 	base := title
-	if base == "" {
-		base = desc
+	if desc != "" && desc != title {
+		if base != "" {
+			base += "\n"
+		}
+		base += desc
 	}
 	if base == "" {
 		base = "New post"
 	}
-	if link != "" {
-		base += " — " + link
+	if link == "" {
+		return pluginutil.PlainText(base, 390)
 	}
-	return pluginutil.CleanExternalText(base, 390)
+	return pluginutil.PlainText(base, 389-utf8.RuneCountInString(link)) + "\n" + link
 }
 
 func renderPost(post Post) string {

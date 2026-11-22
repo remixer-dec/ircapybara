@@ -54,3 +54,10 @@ func TestMirrorTimestampAndTelegramSender(t *testing.T) {
 		t.Fatalf("telegram sender=%q want source channel username", got)
 	}
 }
+
+func TestMirrorPostLayout(t *testing.T) {
+	posts,err:=parseRSS([]byte(`<rss><channel><item><title>Today</title><description><![CDATA[<p>One &amp; two</p><pre>  x<br><br>	y</pre>]]></description><link>https://example.org/post</link></item></channel></rss>`))
+	if err!=nil || len(posts)!=1 || posts[0].Text!="Today\nOne & two\n  x\n\n\ty\nhttps://example.org/post" { t.Fatalf("RSS: %#v, %v",posts,err) }
+	posts,err=parseTelegramPreview(`<div data-post="channel/42"><div class="tgme_widget_message_text"><div>First</div>Second<br><br>&amp;lt;</div></div>`)
+	if err!=nil || len(posts)!=1 || posts[0].Text!="First\nSecond\n\n&lt;\nhttps://t.me/channel/42" { t.Fatalf("Telegram: %#v, %v",posts,err) }
+}

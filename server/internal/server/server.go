@@ -209,10 +209,26 @@ func (s *Server) serveClient(c *model.Client) {
 		_ = tc.SetDeadline(time.Time{})
 	}
 
+	var batch incomingBatch
+	clearBatch := func() {
+		batch = incomingBatch{}
+		_ = c.Conn.SetReadDeadline(time.Time{})
+	}
+	failBatch := func(code string) {
+		clearBatch()
+		s.sendLine(c, ":"+s.cfg.ServerName+" FAIL BATCH "+code+" :Invalid multiline batch")
+	}
 	r := bufio.NewReaderSize(c.Conn, protocol.MaxLineBytes+2)
 	for {
 		raw, err := r.ReadSlice('\n')
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() && batch.id != "" {
+				failBatch("TIMEOUT " + batch.id)
+				if len(raw) == 0 {
+					continue
+				}
+				return
+			}
 			if errors.Is(err, bufio.ErrBufferFull) {
 				s.sendError(c, "Input line too long")
 				reason = "Protocol violation"
@@ -237,6 +253,9 @@ func (s *Server) serveClient(c *model.Client) {
 		}
 		cmd, err := protocol.ParseLine(string(raw))
 		if err != nil {
+			if batch.id != "" {
+				failBatch("MULTILINE_INVALID")
+			}
 			if s.protection.GuardLevel() == 0 {
 				// Permissive mode tolerates unsupported/malformed command envelopes so
 				// legacy clients can send extensions (for example CTCP) we do not implement.
@@ -255,6 +274,36 @@ func (s *Server) serveClient(c *model.Client) {
 			log.Printf("protocol violation from %s: invalid command envelope", c.RemoteIP.String())
 			return
 		}
+		// An opening command pays the flood cost for one bounded batch. Invalid
+		// fragments and orphan tags always consume the normal command budget.
+		batchComplete := false
+		if batch.id != "" || cmd.Name == "BATCH" || len(cmd.Tags) > 0 {
+			open := batch.id != ""
+			var complete protocol.Command
+			failure := "MULTILINE_INVALID"
+			if c.Registered && c.HasCaps("batch", "draft/multiline") {
+				complete, failure = batch.accept(cmd)
+			}
+			if !open || failure != "" {
+				if !s.consumeToken(c) {
+					s.sendError(c, "Flood protection")
+					return
+				}
+			}
+			if failure != "" {
+				failBatch(failure)
+				continue
+			}
+			if !open {
+				_ = c.Conn.SetReadDeadline(time.Now().Add(multilineTimeout))
+			}
+			if complete.Name == "" {
+				continue
+			}
+			clearBatch()
+			cmd = complete
+			batchComplete = true
+		}
 		transferFastPath := cmd.Name == "XFER" && c.Registered && c.ExtendedMode &&
 			(!c.Captcha.Required || c.Captcha.Solved) && !c.IdentityReadOnly &&
 			s.protection.GuardLevel() != 3 && s.transferChunkOwnedBy(c, cmd.Args)
@@ -264,7 +313,7 @@ func (s *Server) serveClient(c *model.Client) {
 				reason = "Transfer flood protection"
 				return
 			}
-		} else if !s.consumeToken(c) {
+		} else if !batchComplete && !s.consumeToken(c) {
 			s.sendError(c, "Flood protection")
 			reason = "Flood protection"
 			return
@@ -344,7 +393,7 @@ func (s *Server) clientView(c *model.Client) pluginapi.ClientView {
 	return pluginapi.ClientView{
 		ID: c.ID, Nick: c.Nick, Username: c.Username, Identity: c.IdentityAuthedNick,
 		IP: c.RemoteIP.String(), Registered: c.Registered, IsOper: c.IsOper,
-		Extended: c.ExtendedMode, HistoryCap: c.Capabilities["ircapybara/history"],
+		Extended: c.ExtendedMode, HistoryCap: c.HasCaps("ircapybara/history"),
 	}
 }
 
@@ -402,7 +451,7 @@ func (s *Server) notice(c *model.Client, text string) {
 	if !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return
 	}
-	s.sendLine(c, fmt.Sprintf(":%s NOTICE %s :%s", s.cfg.ServerName, s.target(c), protocol.EncodeMessageText(text)))
+	s.sendChat(c, chatMessage{prefix: s.cfg.ServerName, verb: "NOTICE", target: s.target(c), text: text})
 }
 
 func (s *Server) sendError(c *model.Client, text string) { s.sendLine(c, "ERROR :"+text) }

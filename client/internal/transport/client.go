@@ -203,11 +203,18 @@ func verifyPinnedPeer(rawCerts [][]byte, pins tlsPins) error {
 }
 
 func (c *Client) Send(line string) error {
-	if strings.ContainsAny(line, "\r\n") {
-		return errors.New("raw line contains newline")
-	}
-	if len(line)+2 > MaxLineBytes {
-		return fmt.Errorf("IRC line exceeds %d bytes", MaxLineBytes)
+	return c.SendLines([]string{line})
+}
+
+// SendLines keeps client-initiated batches contiguous on the wire.
+func (c *Client) SendLines(lines []string) error {
+	for _, line := range lines {
+		if strings.ContainsAny(line, "\r\n") {
+			return errors.New("raw line contains newline")
+		}
+		if len(line)+2 > MaxLineBytes {
+			return fmt.Errorf("IRC line exceeds %d bytes", MaxLineBytes)
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -216,10 +223,17 @@ func (c *Client) Send(line string) error {
 	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	defer c.conn.SetWriteDeadline(time.Time{})
-	if _, err := c.writer.WriteString(line + "\r\n"); err != nil {
+	for _, line := range lines {
+		if _, err := c.writer.WriteString(line + "\r\n"); err != nil {
+			_ = c.conn.Close()
+			return err
+		}
+	}
+	if err := c.writer.Flush(); err != nil {
+		_ = c.conn.Close()
 		return err
 	}
-	return c.writer.Flush()
+	return nil
 }
 
 func (c *Client) Close() error {

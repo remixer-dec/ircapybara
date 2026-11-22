@@ -51,17 +51,17 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         app = application as IRCapybaraApp
 
-        // Draw behind the system bars and pad the content by the real insets.
-        // Including the keyboard inset makes the web view shrink when the
-        // keyboard opens, which the page sees as an ordinary resize.
-        window.setDecorFitsSystemWindows(false)
         root = FrameLayout(this)
-        root.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(
-                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime(),
-            )
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            WindowInsets.CONSUMED
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Draw behind the bars and resize the WebView around the keyboard.
+            window.setDecorFitsSystemWindows(false)
+            root.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime(),
+                )
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                WindowInsets.CONSUMED
+            }
         }
 
         webView = WebView(this)
@@ -113,7 +113,7 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    @Deprecated("Used on Android 11 and 12, which have no OnBackInvokedDispatcher.")
+    @Deprecated("Used before Android 13, which added OnBackInvokedDispatcher.")
     override fun onBackPressed() {
         handleBack()
     }
@@ -138,16 +138,18 @@ class MainActivity : Activity() {
     }
 
     /** Opens the system document picker and blocks the calling (non-main) thread for the result. */
-    fun pickDocument(): Uri? {
+    fun pickDocument(
+        intent: Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
+    ): Uri? {
         val result = CompletableFuture<Uri?>()
         runOnUiThread {
-            pendingDocument?.complete(null)
+            if (pendingDocument != null) {
+                result.complete(null)
+                return@runOnUiThread
+            }
             pendingDocument = result
             try {
-                startActivityForResult(
-                    Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
-                    REQUEST_DOCUMENT,
-                )
+                startActivityForResult(intent, REQUEST_DOCUMENT)
             } catch (_: ActivityNotFoundException) {
                 pendingDocument = null
                 result.complete(null)
@@ -184,11 +186,23 @@ class MainActivity : Activity() {
     }
 
     /** Colours the area behind the system bars to match the page's theme. */
+    @Suppress("DEPRECATION")
     private fun applyChrome(dark: Boolean) {
-        root.setBackgroundColor(getColor(if (dark) R.color.chrome_dark else R.color.chrome_light))
-        val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(if (dark) 0 else light, light)
+        val background = getColor(if (dark) R.color.chrome_dark else R.color.chrome_light)
+        root.setBackgroundColor(background)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (dark) 0 else light, light)
+        } else {
+            val lightNavigation = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            val light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
+                (if (lightNavigation) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0)
+            val decor = window.decorView
+            decor.systemUiVisibility = (decor.systemUiVisibility and light.inv()) or (if (dark) 0 else light)
+            window.statusBarColor = background
+            window.navigationBarColor = if (lightNavigation) background else getColor(R.color.chrome_dark)
+        }
     }
 
     private fun openExternal(url: String) {

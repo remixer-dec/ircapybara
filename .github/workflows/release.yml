@@ -96,6 +96,70 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  android:
+    name: Client (Android)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+        working-directory: client/android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: client/go.mod
+          cache-dependency-path: client/go.sum
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '8.13'
+          cache-provider: basic
+      - name: Build release APK
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          # Use the runner's NDK r29 for 16 KiB native library alignment.
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          ./build-core.sh
+          gradle --no-daemon :app:assembleRelease
+      - name: Prepare release APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          unsigned=app/build/outputs/apk/release/app-release-unsigned.apk
+          if [[ -z "$ANDROID_KEYSTORE_BASE64$ANDROID_KEYSTORE_PASSWORD$ANDROID_KEY_ALIAS$ANDROID_KEY_PASSWORD" ]]; then
+            echo '::warning::Android signing secrets are unset. Publishing an unsigned release APK.'
+            mv "$unsigned" IRCapybara-client-android-unsigned.apk
+            exit 0
+          fi
+
+          : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 secret}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Set the ANDROID_KEYSTORE_PASSWORD secret}"
+          : "${ANDROID_KEY_ALIAS:?Set the ANDROID_KEY_ALIAS secret}"
+          export ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          build_tools="$ANDROID_HOME/build-tools/35.0.0"
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/android-signing.XXXXXX")
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          base64 --decode <<< "$ANDROID_KEYSTORE_BASE64" > "$signing_dir/release.keystore"
+          "$build_tools/zipalign" -P 16 4 "$unsigned" "$signing_dir/aligned.apk"
+          "$build_tools/apksigner" sign \
+            --ks "$signing_dir/release.keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --out IRCapybara-client-android.apk "$signing_dir/aligned.apk"
+          "$build_tools/apksigner" verify IRCapybara-client-android.apk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: IRCapybara-client-android
+          path: client/android/IRCapybara-client-android*.apk
+          if-no-files-found: error
+          compression-level: 0
+
   server:
     name: Server (linux/amd64)
     runs-on: ubuntu-24.04
@@ -131,7 +195,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: [client, server]
+    needs: [client, android, server]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -149,11 +213,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           shopt -s nullglob
-          assets=(release/*.tar.gz release/*.zip)
-          if (( ${#assets[@]} == 0 )); then
-            echo "No release archives downloaded" >&2
+          apk=(release/IRCapybara-client-android*.apk)
+          if (( ${#apk[@]} != 1 )); then
+            echo "Expected one Android release APK" >&2
             exit 1
           fi
+          assets=(release/*.tar.gz release/*.zip "${apk[@]}")
 
           if existing=$(gh release view --json assets --jq '.assets[].name' -- "$TAG"); then
             missing=()

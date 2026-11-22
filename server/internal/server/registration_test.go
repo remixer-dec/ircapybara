@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+ "unicode/utf8"
 
 	"ircapybara/internal/config"
 	"ircapybara/internal/model"
@@ -352,7 +353,13 @@ func TestLongPRIVMSGUpTo32768Runes(t *testing.T) {
 	if disconnect, _ := s.cmdMessage(sender, "#general :"+text, false); disconnect {
 		t.Fatal("long PRIVMSG must not disconnect")
 	}
-	if !strings.Contains(receiverConn.String(), text) {
+	var received strings.Builder
+	for _,line := range strings.Split(strings.TrimSuffix(receiverConn.String(),"\r\n"),"\r\n") {
+		_,body,ok := strings.Cut(line," PRIVMSG #general :")
+		if !ok || len(line)>510 || !utf8.ValidString(line) { t.Fatalf("invalid fallback line: %q",line) }
+		received.WriteString(body)
+	}
+	if received.String()!=text {
 		t.Fatal("receiver did not get full 32768-rune message")
 	}
 }

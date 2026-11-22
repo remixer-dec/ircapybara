@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -269,6 +270,77 @@ func TestSessionLifecycleThroughHost(t *testing.T) {
 	if err := app.SendMessage("#general", "late"); err == nil {
 		t.Fatal("sending after a disconnect should fail")
 	}
+}
+
+func TestNegotiatedMultilineSendAndReceive(t *testing.T) {
+	const caps = "server-time ircapybara/history batch draft/multiline"
+	const reply = "First paragraph\n\n```go\n\tfmt.Println(\"hello\")\n```"
+	server := newFakeServer(t, func(s *fakeServer, line string) {
+		switch line {
+		case "CAP LS 302":
+			s.send(":srv CAP * LS :" + caps + "=max-bytes=131072,max-lines=512")
+		case "JOIN #general":
+			registration(s, line)
+			s.send(
+				":srv NOTICE alice :IRCapybara extended mode active; rendering format v0 is passthrough",
+				"@ircapybara-history=1;time=2026-01-02T03:04:05Z :srv BATCH +reply draft/multiline #general",
+				"@batch=reply :bot!plugin@srv PRIVMSG #general :First paragraph",
+				"@batch=reply :bot!plugin@srv PRIVMSG #general :",
+				"@batch=reply :bot!plugin@srv PRIVMSG #general :```go",
+				"@batch=reply :bot!plugin@srv PRIVMSG #general :\tfmt.Print",
+				"@batch=reply;draft/multiline-concat :bot!plugin@srv PRIVMSG #general :ln(\"hello\")",
+				"@batch=reply :bot!plugin@srv PRIVMSG #general :```",
+				":srv BATCH -reply",
+			)
+		default:
+			registration(s, line)
+		}
+	})
+	host := newRecordingHost(t)
+	app := connectTestApp(t, host, server)
+	host.waitFor(t, "one reassembled bot reply", func() bool {
+		conv, ok := host.conversation("#general")
+		if !ok || !conv.Joined || len(conv.Messages) != 2 {
+			return false
+		}
+		for _, message := range conv.Messages {
+			if message.Sender == "bot" && message.Text == reply && message.Synthetic && message.Historical {
+				return true
+			}
+		}
+		return false
+	})
+	if !server.saw("CAP REQ :" + caps) {
+		t.Fatal("client did not request multiline capabilities")
+	}
+	if status, ok := app.convs.Get("status"); ok {
+		for _, message := range status.Messages {
+			if strings.Contains(message.Text, "rendering format v0") {
+				t.Fatalf("obsolete join notice displayed: %q", message.Text)
+			}
+		}
+	}
+	if err := app.SendMessage("#general", "one\n\n\ttwo"); err != nil {
+		t.Fatal(err)
+	}
+	host.waitFor(t, "one complete outgoing batch", func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		for i, line := range server.received {
+			if rest, ok := strings.CutPrefix(line, "BATCH +"); ok {
+				ref, target, _ := strings.Cut(rest, " ")
+				want := []string{
+					"@batch=" + ref + " PRIVMSG #general :one",
+					"@batch=" + ref + " PRIVMSG #general :",
+					"@batch=" + ref + " PRIVMSG #general :\ttwo",
+					"BATCH -" + ref,
+				}
+				return target == "draft/multiline #general" && len(server.received) >= i+5 &&
+					slices.Equal(server.received[i+1:i+5], want)
+			}
+		}
+		return false
+	})
 }
 
 func TestUserDisconnectStopsConsumer(t *testing.T) {

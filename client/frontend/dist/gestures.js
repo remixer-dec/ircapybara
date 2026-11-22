@@ -63,7 +63,7 @@
     function onDown(event) {
       if (event.pointerType !== 'touch' || !event.isPrimary) return;
       const target = event.target instanceof Element ? event.target : null;
-      if (!target) return;
+      if (!target || target.closest('.markdown code, .markdown-code-block')) return;
 
       const holdable = target.closest('[data-longpress]');
       if (holdable && !target.closest('button, a, input, textarea')) startPress(event, holdable);

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"ircapybara/internal/model"
 	"ircapybara/internal/protocol"
@@ -166,18 +165,18 @@ func (s *Server) SendNoticeToIdentity(identity, text string) error {
 	return nil
 }
 
-func (s *Server) pluginChannelLine(chName, from, text string) (string, error) {
+func (s *Server) pluginChannelMessage(chName, from, text string) (chatMessage, error) {
 	if !protocol.ChannelRE.MatchString(chName) || !validPluginSender(from) || !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
-		return "", errors.New("invalid plugin message")
+		return chatMessage{}, errors.New("invalid plugin message")
 	}
-	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, chName, protocol.EncodeMessageText(text)), nil
+	return chatMessage{prefix: from + "!plugin@" + s.cfg.ServerName, verb: "PRIVMSG", target: chName, text: text}, nil
 }
 
 func (s *Server) SendChannelMessage(channel, from, text string) error {
 	if !s.pluginLiveAllowed() {
 		return errors.New("server is read-only")
 	}
-	line, err := s.pluginChannelLine(channel, from, text)
+	msg, err := s.pluginChannelMessage(channel, from, text)
 	if err != nil {
 		return err
 	}
@@ -193,7 +192,7 @@ func (s *Server) SendChannelMessage(channel, from, text string) error {
 	}
 	s.mu.RUnlock()
 	for _, c := range recipients {
-		s.sendLine(c, line)
+		s.sendChat(c, msg)
 	}
 	return nil
 }
@@ -202,7 +201,7 @@ func (s *Server) SendChannelMessageToClient(clientID, channel, from, text string
 	if !s.pluginLiveAllowed() {
 		return errors.New("server is read-only")
 	}
-	line, err := s.pluginChannelLine(channel, from, text)
+	msg, err := s.pluginChannelMessage(channel, from, text)
 	if err != nil {
 		return err
 	}
@@ -210,7 +209,7 @@ func (s *Server) SendChannelMessageToClient(clientID, channel, from, text string
 	if c == nil {
 		return errors.New("client not connected")
 	}
-	s.sendLine(c, line)
+	s.sendChat(c, msg)
 	return nil
 }
 
@@ -218,7 +217,7 @@ func (s *Server) SendChannelMessageToIdentity(channel, identity, from, text stri
 	if !s.pluginLiveAllowed() {
 		return errors.New("server is read-only")
 	}
-	line, err := s.pluginChannelLine(channel, from, text)
+	msg, err := s.pluginChannelMessage(channel, from, text)
 	if err != nil || !protocol.NickRE.MatchString(identity) {
 		if err != nil {
 			return err
@@ -226,16 +225,16 @@ func (s *Server) SendChannelMessageToIdentity(channel, identity, from, text stri
 		return errors.New("invalid identity")
 	}
 	for _, c := range s.clientsByIdentity(identity) {
-		s.sendLine(c, line)
+		s.sendChat(c, msg)
 	}
 	return nil
 }
 
-func (s *Server) directLine(targetNick, from, text string) (string, error) {
+func (s *Server) pluginDirectMessage(targetNick, from, text string) (chatMessage, error) {
 	if !protocol.NickRE.MatchString(targetNick) || !validPluginSender(from) || !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
-		return "", errors.New("invalid plugin direct message")
+		return chatMessage{}, errors.New("invalid plugin direct message")
 	}
-	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, targetNick, protocol.EncodeMessageText(text)), nil
+	return chatMessage{prefix: from + "!plugin@" + s.cfg.ServerName, verb: "PRIVMSG", target: targetNick, text: text}, nil
 }
 
 func (s *Server) SendDirectMessageToClient(clientID, from, text string) error {
@@ -246,11 +245,11 @@ func (s *Server) SendDirectMessageToClient(clientID, from, text string) error {
 	if c == nil || !c.Registered {
 		return errors.New("client not connected")
 	}
-	line, err := s.directLine(c.Nick, from, text)
+	msg, err := s.pluginDirectMessage(c.Nick, from, text)
 	if err != nil {
 		return err
 	}
-	s.sendLine(c, line)
+	s.sendChat(c, msg)
 	return nil
 }
 
@@ -262,11 +261,11 @@ func (s *Server) SendDirectMessageToIdentity(identity, from, text string) error 
 		return errors.New("invalid identity")
 	}
 	for _, c := range s.clientsByIdentity(identity) {
-		line, err := s.directLine(c.Nick, from, text)
+		msg, err := s.pluginDirectMessage(c.Nick, from, text)
 		if err != nil {
 			return err
 		}
-		s.sendLine(c, line)
+		s.sendChat(c, msg)
 	}
 	return nil
 }
@@ -276,23 +275,14 @@ func (s *Server) DeliverSyntheticHistory(clientID, channel string, items []plugi
 		return errors.New("invalid synthetic history")
 	}
 	c := s.clientByID(clientID)
-	if c == nil || !c.Registered || !c.Capabilities["ircapybara/history"] {
+	if c == nil || !c.Registered || !c.HasCaps("ircapybara/history") {
 		return errors.New("client does not support synthetic history")
 	}
 	for _, item := range items {
 		if !validPluginSender(item.From) || !protocol.ValidMessageText(item.Text, protocol.MaxMessageRunes) {
 			return errors.New("invalid synthetic history item")
 		}
-		tags := "@ircapybara-history=1"
-		if c.Capabilities["server-time"] {
-			t := item.At
-			if t.IsZero() {
-				t = time.Now()
-			}
-			tags += ";time=" + t.UTC().Format(time.RFC3339Nano)
-		}
-		line := fmt.Sprintf("%s :%s!plugin@%s PRIVMSG %s :%s", tags, item.From, s.cfg.ServerName, channel, protocol.EncodeMessageText(item.Text))
-		s.sendLine(c, line)
+		s.sendChat(c, chatMessage{prefix: item.From + "!plugin@" + s.cfg.ServerName, verb: "PRIVMSG", target: channel, text: item.Text, history: true, at: item.At})
 	}
 	return nil
 }

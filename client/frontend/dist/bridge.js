@@ -113,7 +113,14 @@
       window.open(url, '_blank', 'noopener,noreferrer');
     },
     setChrome() {},
-    copyText(text) { return navigator.clipboard.writeText(String(text)); },
+    async copyText(text) {
+      const runtime = window.runtime;
+      if (typeof runtime?.ClipboardSetText === 'function') {
+        if (!await runtime.ClipboardSetText(String(text))) throw new Error('Clipboard unavailable');
+        return;
+      }
+      await navigator.clipboard.writeText(String(text));
+    },
     haptic() {},
   };
 })();

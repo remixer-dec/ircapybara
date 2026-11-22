@@ -43,7 +43,8 @@ The frontend reaches Go only through `frontend/dist/bridge.js` (`IRCapybaraNativ
 - Persistent nickname identification UI, including the optional explicit nickname form.
 - Public/private channel conversation kinds, normal DMs, virtual/plugin DMs, plugin-capable conversation model, and server/status messages.
 - Synthetic senders are rendered as services and are never assumed to be WHOIS-able.
-- 32,768-code-point message limit with multiline text preserved through a private line-separator encoding; transport accepts approximately 132 KiB IRC lines.
+- 32,768-code-point message limit with IRCv3 `batch` / `draft/multiline` support and a private line-separator fallback for older IRCapybara servers.
+- A small, dependency-free Markdown renderer with safe links and optional code syntax highlighting; see below for the supported subset.
 - IRCv3 tags, prefixes, numerics, trailing parameters, unknown tags, unknown numerics, and unknown commands are parsed conservatively.
 - `server-time` and `ircapybara-history=1` are understood; historical plugin messages do not increment frontend unread counters.
 - Dynamic `HELP` request UI with 704/705/706 and 524 handling.
@@ -52,6 +53,20 @@ The frontend reaches Go only through `frontend/dist/bridge.js` (`IRCapybaraNativ
 - Downloads only start after an explicit user action and files are never automatically opened or executed.
 - Light, dark, and system theme modes.
 - No raw IRC command entry in the normal composer.
+
+### Multiline messages
+
+When the server offers both `batch` and `draft/multiline` with usable `max-bytes` and `max-lines` values, the client sends one logical message as a `draft/multiline` batch. Otherwise, it uses the legacy IRCapybara U+2028 line-separator encoding when supported by the peer. Message size is limited to 32,768 Unicode code points. See [the server protocol specification](../server/SPEC.md#7-ircv3-compatibility-and-multiline-messages) for server-side limits and validation.
+
+### Markdown and code blocks
+
+The shared desktop and Android renderer supports paragraphs, headings (`#` through `######`), fenced code blocks, block quotes, flat ordered and unordered lists, emphasis, strong emphasis, backslash escapes, inline code, and links. A single newline within a paragraph is displayed as a line break. Unmatched or unsupported markup remains visible as text. This is a small Markdown subset, not a complete CommonMark implementation; the message Copy action copies the original text, including Markdown markers.
+
+Only absolute HTTP and HTTPS destinations become explicit Markdown links. Prose URLs and recognized nicknames keep the usual link and mention behavior outside code and explicit links. Raw HTML is rendered as text and is never inserted as HTML.
+
+Fenced code highlighting recognizes Go (`go`, `golang`), JavaScript (`js`, `javascript`, `jsx`), TypeScript (`ts`, `typescript`, `tsx`), Python (`py`, `python`), shell (`sh`, `shell`, `bash`, `zsh`), and JSON (`json`). Unknown or unlabeled code remains plain monospace. Highlighting uses CSS Custom Highlights when available and text-only spans otherwise; it is a lightweight lexer, not a full syntax parser. It requires no package or network access.
+
+Markdown parsing is bounded to 65,536 JavaScript code units, 1,024 lines, 4,096 syntax nodes, and 16 nested inline formatting spans. Code highlighting is bounded to 65,536 code units and 4,096 tokens per block. Inputs over the Markdown limits are displayed as plain text.
 
 The code deliberately does not invent future syntax for richer rendering, message IDs, E2EE, reactions, replies, resumable transfers, or future transports. Those can be added behind explicit negotiated capabilities later.
 

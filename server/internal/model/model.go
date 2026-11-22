@@ -86,6 +86,7 @@ type Client struct {
 	Realname       string
 	Registered     bool
 	CapNegotiating bool
+	CapMu          sync.RWMutex
 	Capabilities   map[string]bool
 	IsOper         bool
 
@@ -101,4 +102,15 @@ type Client struct {
 	JoinTimes        []time.Time
 	XferTokens       float64
 	XferTokenUpdated time.Time
+}
+
+func (c *Client) HasCaps(names ...string) bool {
+	c.CapMu.RLock()
+	defer c.CapMu.RUnlock()
+	for _, name := range names {
+		if !c.Capabilities[name] {
+			return false
+		}
+	}
+	return true
 }

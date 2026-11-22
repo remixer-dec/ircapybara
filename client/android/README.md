@@ -2,7 +2,18 @@
 
 A thin Kotlin wrapper around two shared pieces: the Go client core (`../mobile`, compiled with gomobile) and the web frontend (`../frontend/dist`, packaged as assets and shown in a `WebView`). There is no Android-specific UI and no AndroidX dependency.
 
-This project has not been built yet: it was written without an Android SDK available. Expect to fix small things on the first build, most likely tool versions in `build.gradle.kts`.
+## Release APK
+
+Pushing a tag builds the Android release APK alongside the desktop clients and server. Download `IRCapybara-client-android.apk` from the GitHub release’s **Assets**.
+
+To publish an installable APK, configure these repository Actions secrets. Use the same signing key across releases so users can install updates over an existing copy.
+
+- `ANDROID_KEYSTORE_BASE64` contains the release keystore encoded in Base64.
+- `ANDROID_KEYSTORE_PASSWORD` unlocks the keystore.
+- `ANDROID_KEY_ALIAS` selects the signing key.
+- `ANDROID_KEY_PASSWORD` is needed only if the key has a different password from the keystore.
+
+With no signing secrets, the workflow publishes `IRCapybara-client-android-unsigned.apk`, which must be signed before installation. See [Android’s command line signing guide](https://developer.android.com/build/building-cmdline#sign_cmdline).
 
 ## Build
 
@@ -18,7 +29,7 @@ gradle :app:assembleDebug
 
 The first command installs `gomobile` and `gobind` at the versions pinned in `../go.mod` and writes `app/libs/ircapybara.aar`. Re-run it whenever Go code changes. Frontend changes need only the Gradle build.
 
-Minimum Android version is 11 (API 30).
+Minimum Android version is 7.0 (API 24). Update Android System WebView to the newest version available for the device.
 
 ## How it fits together
 
@@ -35,7 +46,7 @@ ConnectionService  foreground service that exists while a server session does
 
 ## Behaviour that differs from desktop
 
-- Attachments: uploads come from the system document picker and are copied into the app cache for the duration of the transfer. Downloads are assembled in app-private storage and, once verified, moved to `Downloads/IRCapybara` through MediaStore; "Open" shows a chooser. No storage permission is needed.
+- Attachments: uploads come from the system document picker and are copied into the app cache for the duration of the transfer. Verified downloads move to `Downloads/IRCapybara` on Android 10 and later. On Android 7 through 9, **Open** asks where to save the file before showing the viewer chooser. No storage permission is needed.
 - Certificate pinning: the chosen file is copied into app-private storage, because the core reads it by path.
 - Background: while connected, a foreground service keeps the process and the socket alive. Swiping the app out of recents disconnects, because message notifications are decided by the page.
 - Back: closes the open sheet, then returns to the chat list, then sends the app to the background (it does not finish the activity, so the page stays loaded).

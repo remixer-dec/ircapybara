@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Mirror --sidebar and --accent in the web frontend's styles.css. -->
+    <!-- Match the sidebar and accent colors in the web frontend. -->
     <color name="chrome_light">#F8FBFC</color>
     <color name="chrome_dark">#162228</color>
     <color name="accent">#3D9A75</color>

@@ -126,7 +126,8 @@ Leave a channel without disconnecting.
 Normal conversation.
 
 - one strict nick or existing channel target;
-- text is 1..32,768 printable UTF-8 code points and contains no IRC/terminal controls;
+- a single-line text is 1..32,768 printable UTF-8 code points and contains no IRC/terminal controls;
+- multiline messages are accepted only as a complete negotiated `batch` / `draft/multiline` batch (see §7); reassembled text follows the same character and control-character validation;
 - channel sender must be a member;
 - moderated channels allow only channel operators or IRC operators;
 - direct messages require a connected registered target;
@@ -459,9 +460,13 @@ Download a completed attachment from server RAM.
 - download chunk size remains fixed at 240 raw bytes; attachment framing intentionally stays small even though ordinary IRCapybara chat lines now support much larger text payloads;
 - the one-hour downloaded-file expiry clock starts only after a successful complete replay to a recipient.
 
-## 7. Compatibility shims
+## 7. IRCv3 compatibility and multiline messages
 
-`CAP LS [302]`, `CAP LIST`, `CAP REQ`, and `CAP END` are handled so modern clients that probe IRCv3 can connect. The server advertises exactly `server-time` and `ircapybara/history` in this iteration. A valid request containing only supported capabilities receives `ACK`; any request containing an unsupported capability receives `NAK`. Starting `CAP LS` suspends IRC registration until `CAP END`; welcome numerics must not be emitted while CAP negotiation is active. `MOTD` is implemented because regular clients commonly expect it.
+`CAP LS [302]`, `CAP LIST`, `CAP REQ`, and `CAP END` are handled. `CAP LS 302` advertises `server-time`, `ircapybara/history`, `batch`, and `draft/multiline=max-bytes=131072,max-lines=512`. A request containing only supported capabilities receives `ACK`; a request containing an unsupported capability receives `NAK`. Starting `CAP LS` suspends IRC registration until `CAP END`; welcome numerics must not be emitted while CAP negotiation is active. `MOTD` is implemented because regular clients commonly expect it.
+
+Clients use multiline only when both `batch` and `draft/multiline` are enabled. A client opens a batch with `BATCH +<id> draft/multiline <target>`, sends tagged `PRIVMSG` or `NOTICE` fragments using `@batch=<id>`, and closes it with `BATCH -<id>`. A fragment tagged `draft/multiline-concat` joins directly to the previous fragment. Otherwise the server inserts one LF between fragments. All fragments must use the same target and command. The server accepts one open client batch per connection, validates and bounds the complete message before dispatching it once through the ordinary message, permission, plugin, and history paths, and expires an unfinished batch after 30 seconds. Limits are 131,072 UTF-8 bytes, 512 fragments, and the ordinary 32,768-code-point message limit. Invalid batches are discarded and reported with `FAIL BATCH`; incomplete batches are cleared on disconnect.
+
+To recipients that negotiated both capabilities, the server frames a multiline chat message as one `draft/multiline` batch. It sends ordinary nonblank message lines to recipients without both capabilities; blank lines cannot be represented in that fallback. The multiline formatter keeps each fragment within a 510-byte envelope, including tags and command metadata. Long fragments are split at UTF-8 rune boundaries and marked with `draft/multiline-concat` so reassembly does not add a line break. The client emits this format when the server advertises usable limits. For older IRCapybara peers, the client retains the private U+2028 line-separator encoding; this compatibility shim is not part of IRCv3.
 
 `ircapybara/history` is intentionally an IRCapybara capability rather than a claim of complete IRCv3 `draft/chathistory` support. It tells plugins that the client accepts synthetic replay messages marked with an `ircapybara-history=1` message tag. If `server-time` is also enabled, those replay messages include a `time=` tag. Clients that do not request the capability receive plugin backlogs as ordinary IRC messages only to that client.
 
@@ -612,7 +617,7 @@ Acceptance criteria:
 - Authorization bearer header is sent only when an API key is configured;
 - response body is capped at 2 MiB and only the first choice's text/refusal is used;
 - the response `model` field is converted to an IRC-safe synthetic responder nick; configured `IRCAPYBARA_CHAT_NICK` is used only as fallback;
-- model output is flattened to one IRC-safe line, capped at the server 32,768-character message limit, and delivered only to the originating connection without artificial 390-character chunking;
+- model output preserves paragraph and code-block line breaks, is capped at the server 32,768-code-point message limit, and is delivered only to the originating connection without artificial 390-character chunking;
 - `AIRESET` with no arguments resets only the requesting user's context; exact AI-channel messages `!reset` and `/reset` are aliases; reset increments a per-session epoch so an already in-flight stale response is discarded instead of repopulating cleared context;
 - `IRCAPYBARA_CHAT_HISTORY_ENABLED=true` (default) keeps private RAM context/history keyed by authenticated identity when present, otherwise by connection ID; unauthenticated session state is removed on disconnect; when disabled, each request is stateless;
 - maximum retained context/history is 20 total user/assistant messages; on join it is replayed only to that user (synthetic history for `ircapybara/history` clients, private-to-that-client channel messages otherwise);

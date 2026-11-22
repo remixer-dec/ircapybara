@@ -36,6 +36,7 @@
   }
 
   createApp({
+    components: { ChatMarkdown: window.IRCapybaraMarkdown.component },
     setup() {
       const snapshot = ref(blankSnapshot());
       const activeId = ref('status');
@@ -1061,6 +1062,10 @@
         }
       }
 
+      function copyCode(source) {
+        return copyText(source, 'Code copied.');
+      }
+
       function copyActionMessage(link) {
         const message = actionMessage.value;
         if (!message) return;
@@ -1672,7 +1677,7 @@
         compactCount, avatarLetters, capybaraAvatar, kindLabel, conversationIcon, isOperator, openProfile, openProfileDM, profilePresence, profileLastSeen, formatTime, formatDateTime, formatTraceTime,
         showDaySeparator, formatDay, linkifyText, openExternalLink, formatBytes, fileBadge, lastPreview,
         openConversation, openOverview, showList, onMessagesScroll, jumpToLatest, firstLink, isOwnMessage,
-        openMessageActions, copyActionMessage, mentionActionSender, messageActionSender, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
+        openMessageActions, copyActionMessage, copyCode, mentionActionSender, messageActionSender, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
         solveCaptcha, openChat, requestHistory, refreshChannels, requestHelp, resetAI, normalizeDraft,
         sendMessage, pickAndUpload, downloadAttachment, restartAttachment, transferState, transferIsBusy, transferStatusLabel, transferButtonLabel, transferButtonIcon, pickTLSCertificate, toggleTheme,
         syncComposerCursor, handleComposerInput, handleComposerKeydown, selectMention,

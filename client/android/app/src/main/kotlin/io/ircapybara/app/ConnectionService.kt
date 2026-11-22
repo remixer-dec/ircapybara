@@ -76,9 +76,12 @@ class ConnectionService : Service() {
                 return
             }
             try {
-                context.startForegroundService(
-                    Intent(context, ConnectionService::class.java).putExtra(EXTRA_LABEL, label),
-                )
+                val intent = Intent(context, ConnectionService::class.java).putExtra(EXTRA_LABEL, label)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
             } catch (_: RuntimeException) {
                 // The session was started while the app was not in the foreground.
                 // It keeps working while the app is visible.
@@ -86,6 +89,7 @@ class ConnectionService : Service() {
             }
         }
 
+        @Suppress("DEPRECATION")
         private fun buildNotification(context: Context, label: String): Notification {
             val open = PendingIntent.getActivity(
                 context,
@@ -104,7 +108,12 @@ class ConnectionService : Service() {
             } else {
                 context.getString(R.string.connection_title, label)
             }
-            return Notification.Builder(context, IRCapybaraApp.CHANNEL_CONNECTION)
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, IRCapybaraApp.CHANNEL_CONNECTION)
+            } else {
+                Notification.Builder(context).setPriority(Notification.PRIORITY_LOW)
+            }
+            return builder
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(title)
                 .setContentText(context.getString(R.string.connection_text))

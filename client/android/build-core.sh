@@ -16,7 +16,7 @@ gomobile init
 mkdir -p android/app/libs
 gomobile bind \
     -target=android \
-    -androidapi 30 \
+    -androidapi 24 \
     -javapkg=io.ircapybara \
     -ldflags="-s -w" \
     -o android/app/libs/ircapybara.aar \

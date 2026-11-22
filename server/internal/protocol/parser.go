@@ -22,6 +22,7 @@ const messageLineSeparator = "\u2028"
 type Command struct {
 	Name string
 	Args string
+	Tags map[string]string
 }
 
 var (
@@ -51,7 +52,7 @@ var (
 	UserArgsRE          = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,31}) [0-9]{1,3} \* (?::(.{1,80})|([^\x00-\x20\x7f]{1,80}))$`)
 	JoinArgsRE          = regexp.MustCompile(`^(#[A-Za-z0-9_-]{1,48}(?:,#[A-Za-z0-9_-]{1,48}){0,15})(?: ([\x21-\x7e]{1,64}(?:,[\x21-\x7e]{1,64}){0,15}))?$`)
 	PartArgsRE          = regexp.MustCompile(`^(#[A-Za-z0-9_-]{1,48})(?: :(.{0,160}))?$`)
-	MessageArgsRE       = regexp.MustCompile(`^(#[A-Za-z0-9_-]{1,48}|[A-Za-z][A-Za-z0-9_\-\[\]\\` + "`" + `^{}]{0,30}) :(.+)$`)
+	MessageArgsRE       = regexp.MustCompile(`(?s)^(#[A-Za-z0-9_-]{1,48}|[A-Za-z][A-Za-z0-9_\-\[\]\\` + "`" + `^{}]{0,30}) :(.+)$`)
 	TopicArgsRE         = regexp.MustCompile(`^(#[A-Za-z0-9_-]{1,48})(?: :(.{0,180}))?$`)
 	SingleChannelRE     = regexp.MustCompile(`^(#[A-Za-z0-9_-]{1,48})$`)
 	WhoArgsRE           = regexp.MustCompile(`^([#A-Za-z0-9*?._@:/-]{1,64})$`)
@@ -80,11 +81,40 @@ func ParseLine(raw string) (Command, error) {
 	if len(raw) == 0 || len(raw) > MaxLineBytes || !utf8.ValidString(raw) || utf8.RuneCountInString(raw) > MaxLineRunes {
 		return Command{}, errors.New("invalid line length or utf-8")
 	}
+	var tags map[string]string
+	if strings.HasPrefix(raw, "@") {
+		head, rest, ok := strings.Cut(raw[1:], " ")
+		if !ok || len(head) > 4096 || strings.ContainsAny(head, "\r\n\t\x00") {
+			return Command{}, errors.New("invalid tags")
+		}
+		tags = make(map[string]string)
+		for _, tag := range strings.Split(head, ";") {
+			key, value, _ := strings.Cut(tag, "=")
+			if key == "" {
+				return Command{}, errors.New("empty tag")
+			}
+			if _, exists := tags[key]; exists {
+				return Command{}, errors.New("duplicate tag")
+			}
+			tags[key] = value
+		}
+		raw = rest
+	}
+	// Only the trailing parameter of a chat command can contain a tab.
+	if strings.Contains(raw, "\t") {
+		head, body, ok := strings.Cut(raw, " :")
+		verb, target, _ := strings.Cut(head, " ")
+		if ok && (strings.EqualFold(verb, "PRIVMSG") || strings.EqualFold(verb, "NOTICE")) &&
+			(ChannelRE.MatchString(target) || NickRE.MatchString(target)) && ValidMessageText(body, MaxMessageRunes) && !strings.ContainsAny(body, "\r\n") {
+			return Command{Name: strings.ToUpper(verb), Args: target + " :" + body, Tags: tags}, nil
+		}
+		return Command{}, errors.New("invalid tab")
+	}
 	m := envelopeRE.FindStringSubmatch(raw)
 	if m == nil {
 		return Command{}, errors.New("invalid command envelope")
 	}
-	return Command{Name: strings.ToUpper(m[1]), Args: m[2]}, nil
+	return Command{Name: strings.ToUpper(m[1]), Args: m[2], Tags: tags}, nil
 }
 
 // ValidText rejects IRC/terminal control characters. ASCII is naturally valid UTF-8;
@@ -113,7 +143,7 @@ func ValidMessageText(s string, maxRunes int) bool {
 	if !utf8.ValidString(decoded) || utf8.RuneCountInString(decoded) > maxRunes {
 		return false
 	}
-	normalized := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(decoded)
+	normalized := strings.NewReplacer("\n", " ", "\t", " ").Replace(decoded)
 	return textRE.MatchString(normalized)
 }
 

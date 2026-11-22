@@ -10,7 +10,8 @@ import (
 )
 
 func TestChatCompletionRequestShape(t *testing.T) {
-	var got map[string]any
+	const answerText = "Example:\n\n```go\n\tList<T> // &lt;\n```"
+ var got map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path=%s", r.URL.Path)
@@ -19,7 +20,7 @@ func TestChatCompletionRequestShape(t *testing.T) {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"actual-model-2026","choices":[{"message":{"content":"hello from model"}}]}`))
+		fmt.Fprintf(w,`{"model":"actual-model-2026","choices":[{"message":{"content":%q}}]}`,answerText)
 	}))
 	defer ts.Close()
 
@@ -28,7 +29,7 @@ func TestChatCompletionRequestShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer != "hello from model" {
+	if answer != answerText {
 		t.Fatalf("answer=%q", answer)
 	}
 	if responseModel != "actual-model-2026" {

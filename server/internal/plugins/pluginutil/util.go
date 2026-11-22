@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -35,6 +36,60 @@ func CleanExternalText(s string, maxRunes int) string {
 		return ""
 	}
 	return s
+}
+
+// PlainText keeps chat layout and literal markup, including source code.
+func PlainText(s string, maxRunes int) string {
+	s = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s)
+	var out strings.Builder
+	for _, r := range s {
+		if maxRunes <= 0 {
+			break
+		}
+		if r != '\n' && r != '\t' && !unicode.IsPrint(r) && !unicode.Is(unicode.Zs, r) {
+			continue
+		}
+		out.WriteRune(r)
+		maxRunes--
+	}
+	return out.String()
+}
+
+// HTMLText strips inline markup without inserting spaces into words. Block
+// boundaries add a newline only when needed, while each explicit br counts.
+var markupRE = regexp.MustCompile(`(?is)<!--.*?-->|</?([a-z][a-z0-9:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>`)
+
+func HTMLText(s string, maxRunes int) string {
+	var out strings.Builder
+	start := 0
+	lineBreak := true
+	write := func(part string) {
+		if part == "" {
+			return
+		}
+		part = html.UnescapeString(part)
+		out.WriteString(part)
+		lineBreak = strings.HasSuffix(part, "\n")
+	}
+	for _, m := range markupRE.FindAllStringSubmatchIndex(s, -1) {
+		write(s[start:m[0]])
+		start = m[1]
+		if m[2] < 0 {
+			continue
+		}
+		switch strings.ToLower(s[m[2]:m[3]]) {
+		case "br":
+			out.WriteByte('\n')
+			lineBreak = true
+		case "p", "div", "li", "pre", "blockquote":
+			if !lineBreak {
+				out.WriteByte('\n')
+				lineBreak = true
+			}
+		}
+	}
+	write(s[start:])
+	return PlainText(strings.Trim(out.String(), "\r\n"), maxRunes)
 }
 
 func ChunkText(s string, maxRunes int) []string {
