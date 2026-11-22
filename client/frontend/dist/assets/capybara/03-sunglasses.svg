@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">Golden Hour — capybara profile picture</title>
+<desc id="desc">Editable vector capybara with golden hour accessories. Color palette is in the style block.</desc>
+<!-- COLOR PALETTE: edit hex values here. Shared classes recolor matching parts together. -->
+<style>
+    .bg { fill: #F5D4A7; }
+    .fur { fill: #B98C64; }
+    .shade { fill: #906442; }
+    .muzzle { fill: #CCA57B; }
+    .ink { fill: #46352E; }
+    .blush { fill: #D99780; }
+    .accent { fill: #DE725B; }
+    .accent2 { fill: #F7E1A4; }
+    .line { fill:none; }
+    .star { fill:none; stroke: #DE725B; stroke-width:5; }
+</style>
+<defs><clipPath id="canvas"><rect width="512" height="512" rx="96"/></clipPath></defs>
+<g clip-path="url(#canvas)">
+<rect id="background" class="bg" width="512" height="512"/>
+<circle cx="256" cy="259" r="199" fill="#FFFFFF" opacity=".16"/>
+<g stroke="#46352E" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+<g id="decoration"><path class="star" d="M105 276v20m-10-10h20M406 320v16m-8-8h16" /></g>
+<g id="accessory-back"></g>
+<g id="body"><path class="fur" d="M147 479q-4-73 45-104h127q52 31 55 104Z" /></g>
+<g id="head"><ellipse class="fur" cx="189" cy="198" rx="29" ry="35" /><ellipse class="fur" cx="331" cy="189" rx="27" ry="33" /><ellipse class="shade" cx="191" cy="199" rx="12" ry="18" stroke="none"/><ellipse class="shade" cx="331" cy="190" rx="11" ry="16" stroke="none"/><path class="fur" d="M186 209q13-33 72-33 83-2 102 67 14 25 15 62 29 21 28 52-2 47-60 55l-135-2q-58-8-57-62l1-78q0-37 34-61Z" /><path class="muzzle" d="M237 305q42-11 95-4 57 6 58 43 0 45-52 47l-97-2q-33-2-34-33-2-35 30-51Z" stroke="none"/></g>
+<g id="face"><rect class="ink" x="188" y="248" width="72" height="48" rx="16"/><rect class="ink" x="278" y="246" width="69" height="48" rx="16"/><path class="line" d="M260 261q9-9 18 0m-90-5-18-5m177 5 20-7" /><path class="accent2" d="M203 259l14 0-17 22h-5Z" stroke="none"/><path class="accent2" d="M295 257h14l-18 23h-6Z" stroke="none"/><ellipse class="ink" cx="352" cy="326" rx="8" ry="5" stroke="none"/><path class="line" d="M347 350q-16 10-32 0" /><ellipse class="blush" cx="194" cy="307" rx="17" ry="9" stroke="none"/><path class="line" d="M177 345l-10-3m12 17-11 2" /></g>
+<g id="accessory-front"><path class="line" d="M193 413q67 23 129-2" /><ellipse class="accent" cx="259" cy="435" rx="10" ry="13" /></g>
+<g id="headwear"></g>
+</g></g></svg>

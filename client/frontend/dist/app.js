@@ -15,6 +15,7 @@
     identityDetail: '',
     captchaWord: '',
     captchaPrompt: '',
+    profiles: {},
     conversations: [{ id: 'status', name: 'Home', kind: 'status', messages: [] }],
   });
 
@@ -48,6 +49,10 @@
       const theme = ref('light');
       const draft = ref('');
       const modal = ref('');
+      const profileTarget = ref(null);
+      const composerCursor = ref(0);
+      const mentionIndex = ref(0);
+      const mentionDismissed = ref(false);
       const formError = ref('');
       const busy = ref(false);
       const identityNick = ref('');
@@ -65,6 +70,7 @@
       const downloadStates = reactive({});
       const toasts = ref([]);
       const protocolTrace = ref([]);
+      const reconnectTargetId = ref('');
       const notificationPrefs = reactive({
         enabled: true,
         popup: true,
@@ -96,6 +102,9 @@
       let notificationAudio = null;
       let notificationAudioUnlocked = false;
       const lastMessageIds = new Map();
+      const capybaraAssetFiles = ref([]);
+      const capybaraAssets = reactive({});
+      const capybaraCache = new Map();
 
       const conversations = computed(() => Array.isArray(snapshot.value.conversations) ? snapshot.value.conversations : []);
       const visibleConversations = computed(() => conversations.value.filter(c => c.kind !== 'status'));
@@ -120,6 +129,38 @@
       const isMobile = computed(() => platform.value !== 'desktop');
       // On a phone the conversation is only on screen while its pane is showing.
       const conversationVisible = computed(() => !isPhone.value || mobilePane.value === 'chat');
+      const profileDetails = computed(() => buildProfileDetails(profileTarget.value?.name));
+
+      const mentionSuggestions = computed(() => {
+        if (mentionDismissed.value || !canCompose.value) return [];
+        const context = mentionContext();
+        if (!context) return [];
+        const conv = selectedConversation.value;
+        const candidates = new Map();
+        for (const member of conv?.members || []) {
+          const nick = String(member.nick || '').trim();
+          if (nick) candidates.set(nick.toLowerCase(), { nick, operator: !!member.operator, online: member.online !== false });
+        }
+        for (const message of conv?.messages || []) {
+          if (message.system || message.synthetic) continue;
+          const nick = String(message.sender || '').trim();
+          if (nick && !candidates.has(nick.toLowerCase())) candidates.set(nick.toLowerCase(), { nick, operator: false, online: true });
+        }
+        const ownNick = String(snapshot.value.nick || '').toLowerCase();
+        const query = context.query.toLowerCase();
+        if (isChannel(conv) && 'everyone'.includes(query)) {
+          candidates.set('everyone', { nick: 'everyone', everyone: true, operator: false, online: true });
+        }
+        return [...candidates.values()]
+          .filter(candidate => candidate.nick.toLowerCase() !== ownNick && candidate.nick.toLowerCase().includes(query))
+          .sort((a, b) => {
+            if (!!a.everyone !== !!b.everyone) return a.everyone ? -1 : 1;
+            const aStarts = a.nick.toLowerCase().startsWith(query) ? 0 : 1;
+            const bStarts = b.nick.toLowerCase().startsWith(query) ? 0 : 1;
+            return aStarts - bStarts || a.nick.localeCompare(b.nick, undefined, { sensitivity: 'base' });
+          })
+          .slice(0, 8);
+      });
 
       const serverLabel = computed(() => snapshot.value.server || connection.serverLabel || connection.host || 'IRCapybara');
 
@@ -184,8 +225,8 @@
 
       const composerPlaceholder = computed(() => selectedConversation.value ? `Message ${selectedConversation.value.name}…` : 'Message…');
       const composerHint = computed(() => snapshot.value.extended
-        ? 'Enter to send · Plain text · Attachments available · 32,768 characters max'
-        : 'Enter to send · Plain text · 32,768 characters max');
+        ? 'Enter to send · Shift+Enter for a new line · Plain text · Attachments available · 32,768 characters max'
+        : 'Enter to send · Shift+Enter for a new line · Plain text · 32,768 characters max');
 
       const banner = computed(() => {
         const state = snapshot.value.state;
@@ -199,6 +240,20 @@
 
       function isChannel(conv) {
         return !!conv && ['channel', 'private-channel', 'plugin-channel'].includes(conv.kind);
+      }
+
+      function channelNickCandidates(conv) {
+        const candidates = new Map();
+        if (!isChannel(conv)) return candidates;
+        for (const member of conv.members || []) {
+          const nick = String(member.nick || '').trim();
+          if (nick) candidates.set(nick.toLowerCase(), nick);
+        }
+        return candidates;
+      }
+
+      function isKnownChannelNick(conv, nick) {
+        return !!String(nick || '').trim() && channelNickCandidates(conv).has(String(nick).trim().toLowerCase());
       }
 
       function showToast(text, kind = '', duration = 3200) {
@@ -265,8 +320,310 @@
         return hash >>> 0;
       }
 
+      function seededValue(seed, salt) {
+        let value = Math.imul((seed ^ salt) >>> 0, 0x45d9f3b);
+        value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
+        value ^= value >>> 16;
+        return (value >>> 0) / 4294967296;
+      }
+
+      function hslToHex(hue, saturation, lightness) {
+        const s = saturation / 100;
+        const l = lightness / 100;
+        const chroma = (1 - Math.abs(2 * l - 1)) * s;
+        const section = (((hue % 360) + 360) % 360) / 60;
+        const x = chroma * (1 - Math.abs(section % 2 - 1));
+        const match = section < 1 ? [chroma, x, 0] : section < 2 ? [x, chroma, 0] : section < 3 ? [0, chroma, x] : section < 4 ? [0, x, chroma] : section < 5 ? [x, 0, chroma] : [chroma, 0, x];
+        const offset = l - chroma / 2;
+        return `#${match.map(channel => Math.round((channel + offset) * 255).toString(16).padStart(2, '0')).join('')}`;
+      }
+
+      function capybaraPalette(seed) {
+        // Capybara fur stays in the natural brown/tan/gray range. Keep the
+        // unusual cases to warm blonde and pale albino rather than turning
+        // the animal blue or green.
+        const furFamilies = [
+          { hue: 18, saturation: 52, lightness: 34 },
+          { hue: 24, saturation: 50, lightness: 42 },
+          { hue: 30, saturation: 46, lightness: 48 },
+          { hue: 36, saturation: 42, lightness: 56 },
+          { hue: 42, saturation: 38, lightness: 63 },
+          { hue: 50, saturation: 34, lightness: 51 },
+          { hue: 58, saturation: 30, lightness: 44 },
+        ];
+        const family = furFamilies[Math.floor(seededValue(seed, 11) * furFamilies.length)];
+        let furHue = family.hue + (seededValue(seed, 13) - 0.5) * 8;
+        let furSaturation = family.saturation + (seededValue(seed, 43) - 0.5) * 12;
+        let furLightness = family.lightness + (seededValue(seed, 47) - 0.5) * 16;
+        const coatVariant = seededValue(seed, 151);
+        if (coatVariant < 0.1) {
+          // Albino/cream coat: warm enough to remain capybara-like, but very
+          // low saturation and light enough to read as a pale animal.
+          furHue = 34 + (seededValue(seed, 157) - 0.5) * 10;
+          furSaturation = 6 + seededValue(seed, 163) * 14;
+          furLightness = 78 + seededValue(seed, 167) * 12;
+        } else if (coatVariant < 0.26) {
+          // Blonde coat: golden beige, not bright yellow.
+          furHue = 34 + (seededValue(seed, 173) - 0.5) * 12;
+          furSaturation = 28 + seededValue(seed, 179) * 20;
+          furLightness = 61 + seededValue(seed, 181) * 14;
+        }
+        furSaturation = Math.max(12, Math.min(65, furSaturation));
+        furLightness = Math.max(27, Math.min(91, furLightness));
+        const accentHue = (furHue + 76 + seededValue(seed, 23) * 205) % 360;
+        const backgroundHue = seededValue(seed, 31) * 360;
+        const outlineHue = (furHue + seededValue(seed, 71) * 34 - 17 + 360) % 360;
+        return {
+          bg: hslToHex(backgroundHue, 28 + seededValue(seed, 37) * 28, 81 + seededValue(seed, 41) * 11),
+          fur: hslToHex(furHue, furSaturation, furLightness),
+          shade: hslToHex(furHue, Math.min(80, furSaturation + 18), Math.max(20, furLightness - 18)),
+          muzzle: hslToHex(furHue, Math.max(26, furSaturation - 2), Math.max(28, furLightness - 5)),
+          ink: hslToHex(outlineHue, 36 + seededValue(seed, 73) * 30, 9 + seededValue(seed, 79) * 10),
+          blush: hslToHex((furHue + 350 + seededValue(seed, 89) * 20) % 360, 24 + seededValue(seed, 83) * 22, 54 + seededValue(seed, 89) * 15),
+          accent: hslToHex(accentHue, 48 + seededValue(seed, 97) * 34, 43 + seededValue(seed, 101) * 23),
+          accent2: hslToHex((accentHue + 24 + seededValue(seed, 103) * 44) % 360, 34 + seededValue(seed, 107) * 34, 61 + seededValue(seed, 109) * 22),
+          line: hslToHex(outlineHue, 44 + seededValue(seed, 113) * 30, 13 + seededValue(seed, 127) * 10),
+          star: hslToHex((accentHue + 12) % 360, 62 + seededValue(seed, 137) * 26, 50 + seededValue(seed, 139) * 17),
+        };
+      }
+
+      function recolorCapybara(source, seed) {
+        const palette = capybaraPalette(seed);
+        let svg = source;
+        for (const className of ['bg', 'fur', 'shade', 'muzzle', 'ink', 'blush', 'accent', 'accent2']) {
+          const classRule = new RegExp(`(\\.${className}\\s*\\{[^}]*?\\bfill:\\s*)#[0-9a-f]{3,8}`, 'i');
+          svg = svg.replace(classRule, `$1${palette[className]}`);
+        }
+        svg = svg.replace(/(\.line\s*\{[^}]*?\bstroke:\s*)#[0-9a-f]{3,8}/i, `$1${palette.line}`);
+        svg = svg.replace(/(\.star\s*\{[^}]*?\bstroke:\s*)#[0-9a-f]{3,8}/i, `$1${palette.star}`);
+        // Artwork with explicit path strokes uses those as outlines too. Give
+        // them the same nickname-seeded outline rather than one fixed brown.
+        svg = svg.replace(/(stroke=["'])#[0-9a-f]{3,8}(["'])/gi, `$1${palette.line}$2`);
+        return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+      }
+
       function capybaraAvatar(name) {
-        return `./assets/capybara/capybara-${(hashName(name) % 2) + 1}.svg`;
+        const seed = hashName(name);
+        const files = capybaraAssetFiles.value;
+        const styleIndex = files.length ? Math.floor(seededValue(seed, 0x6d2b79f5) * files.length) : 0;
+        const style = files[styleIndex] || 'capybara-1.svg';
+        const source = capybaraAssets[style];
+        if (!source) return `./assets/capybara/${style}`;
+        const cacheKey = `${style}:${seed}`;
+        if (!capybaraCache.has(cacheKey)) capybaraCache.set(cacheKey, recolorCapybara(source, seed));
+        return capybaraCache.get(cacheKey);
+      }
+
+      async function loadCapybaraAssets() {
+        let files = [];
+        try {
+          const listed = await invoke('GetCapybaraAvatars');
+          if (Array.isArray(listed)) files = listed.filter(file => typeof file === 'string' && file.toLowerCase().endsWith('.svg'));
+        } catch (_) {}
+        if (!files.length) files = ['capybara-1.svg'];
+        capybaraAssetFiles.value = files;
+        await Promise.all(files.map(async file => {
+          try {
+            const response = await fetch(`./assets/capybara/${file}`);
+            if (response.ok) capybaraAssets[file] = await response.text();
+          } catch (_) {}
+        }));
+      }
+
+      function isOperator(message, conv = selectedConversation.value) {
+        const sender = String(message?.sender || '').toLowerCase();
+        return !!sender && !!conv && isChannel(conv) && (conv.members || []).some(member => member.operator && String(member.nick || '').toLowerCase() === sender);
+      }
+
+      function profileFromServer(name) {
+        const profiles = snapshot.value.profiles && typeof snapshot.value.profiles === 'object' ? snapshot.value.profiles : {};
+        const key = String(name || '').toLowerCase();
+        return profiles[key] || Object.values(profiles).find(profile => String(profile?.nick || '').toLowerCase() === key) || null;
+      }
+
+      function usableProfileDate(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        // Go time.Time zero values are encoded as year 1. They are absence,
+        // not a real sign-on or activity date.
+        if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return '';
+        return value;
+      }
+
+      function buildProfileDetails(name) {
+        const value = String(name || '').trim();
+        if (!value) return null;
+        const key = value.toLowerCase();
+        const channels = new Map();
+        let latestMessage = '';
+        let messageCount = 0;
+        let localOnline = false;
+        let localOperator = false;
+        for (const conv of conversations.value) {
+          const member = (conv.members || []).find(item => String(item.nick || '').toLowerCase() === key);
+          if (member) {
+            localOnline = localOnline || member.online !== false;
+            localOperator = localOperator || !!member.operator;
+            if (isChannel(conv)) channels.set(conv.id.toLowerCase(), conv.name || conv.id);
+          }
+          for (const message of conv.messages || []) {
+            if (String(message.sender || '').toLowerCase() !== key) continue;
+            messageCount += 1;
+            const messageDate = new Date(message.time);
+            if (messageDate.getTime() > 0 && (!latestMessage || messageDate > new Date(latestMessage))) latestMessage = message.time;
+            if (isChannel(conv)) channels.set(conv.id.toLowerCase(), conv.name || conv.id);
+          }
+        }
+        const serverProfile = profileFromServer(value) || {};
+        const serverLastActive = usableProfileDate(serverProfile.lastActive);
+        const serverSignOn = usableProfileDate(serverProfile.signOn);
+        const remoteChannels = Array.isArray(serverProfile.channels) ? serverProfile.channels : [];
+        for (const channel of remoteChannels) if (channel) channels.set(String(channel).toLowerCase(), channel);
+        return {
+          name: serverProfile.nick || value,
+          username: serverProfile.username || '',
+          host: serverProfile.host || '',
+          realname: serverProfile.realname || '',
+          channels: [...channels.values()],
+          operator: !!serverProfile.operator || localOperator,
+          online: isConnected.value && (!!serverProfile.online || localOnline),
+          loading: !!serverProfile.loading,
+          error: serverProfile.error || profileTarget.value?.requestError || '',
+          idleSeconds: Number(serverProfile.idleSeconds) || 0,
+          lastActive: serverLastActive,
+          lastSeen: isConnected.value && serverLastActive ? serverLastActive : latestMessage,
+          signOn: serverSignOn,
+          messageCount,
+        };
+      }
+
+      function profilePresence(profile) {
+        if (!profile) return '';
+        if (profile.loading) return 'Checking live status…';
+        if (profile.online) {
+          if (profile.idleSeconds > 60) return `Online · idle for ${formatDuration(profile.idleSeconds)}`;
+          return 'Online now';
+        }
+        return 'Offline';
+      }
+
+      function profileLastSeen(profile) {
+        if (!profile) return 'Not available';
+        if (profile.online) {
+          if (profile.lastActive) return `Active ${formatRelativeTime(profile.lastActive)}`;
+          return 'Online now';
+        }
+        if (profile.lastSeen) return `${formatDateTime(profile.lastSeen)} · local history`;
+        return 'Not available';
+      }
+
+      async function openProfile(name) {
+        const value = String(name || '').trim();
+        if (!value) return;
+        profileTarget.value = { name: value, operator: isOperator({ sender: value }), requestError: '' };
+        openModal('profile');
+        if (isConnected.value) {
+          try {
+            await invoke('RequestProfile', value);
+          } catch (err) {
+            if (profileTarget.value?.name.toLowerCase() === value.toLowerCase()) profileTarget.value.requestError = errorText(err);
+          }
+        }
+      }
+
+      function mentionContext() {
+        const cursor = Math.max(0, Math.min(Number(composerCursor.value) || 0, draft.value.length));
+        const before = draft.value.slice(0, cursor);
+        const match = before.match(/(?:^|\s)@([A-Za-z0-9_\-\[\]\\`^{}]*)$/);
+        if (!match) return null;
+        return { start: cursor - match[1].length - 1, query: match[1] };
+      }
+
+      function syncComposerCursor(event) {
+        if (event?.target && typeof event.target.selectionStart === 'number') composerCursor.value = event.target.selectionStart;
+      }
+
+      function handleComposerInput(event) {
+        mentionDismissed.value = false;
+        syncComposerCursor(event);
+        normalizeDraft();
+      }
+
+      function moveMention(delta) {
+        if (!mentionSuggestions.value.length) return;
+        const count = mentionSuggestions.value.length;
+        mentionIndex.value = (mentionIndex.value + delta + count) % count;
+      }
+
+      function dismissMentions() {
+        if (mentionSuggestions.value.length) mentionDismissed.value = true;
+      }
+
+      function selectMention(nick = mentionSuggestions.value[mentionIndex.value]?.nick) {
+        if (!nick) return;
+        const context = mentionContext();
+        if (!context) return;
+        const cursor = Math.max(0, Math.min(Number(composerCursor.value) || 0, draft.value.length));
+        const before = draft.value.slice(0, context.start);
+        const after = draft.value.slice(cursor);
+        let replacement = `@${nick} `;
+        if (String(nick).toLowerCase() === 'everyone' && isChannel(selectedConversation.value)) {
+          const ownNick = String(snapshot.value.nick || '').trim().toLowerCase();
+          const everyone = [...channelNickCandidates(selectedConversation.value).entries()]
+            .filter(([key]) => key !== ownNick)
+            .map(([, value]) => `@${value}`);
+          if (everyone.length) replacement = `${everyone.join(' ')} `;
+        }
+        draft.value = `${before}${replacement}${after}`;
+        mentionDismissed.value = false;
+        mentionIndex.value = 0;
+        const nextCursor = before.length + replacement.length;
+        composerCursor.value = nextCursor;
+        nextTick(() => {
+          const input = messageInput.value;
+          if (!input) return;
+          input.focus();
+          input.setSelectionRange(nextCursor, nextCursor);
+        });
+      }
+
+      function handleComposerKeydown(event) {
+        if (event.isComposing) return;
+        if (event.key === 'ArrowDown' && mentionSuggestions.value.length) {
+          event.preventDefault();
+          moveMention(1);
+          return;
+        }
+        if (event.key === 'ArrowUp' && mentionSuggestions.value.length) {
+          event.preventDefault();
+          moveMention(-1);
+          return;
+        }
+        if (event.key === 'Tab' && mentionSuggestions.value.length) {
+          event.preventDefault();
+          selectMention();
+          return;
+        }
+        if (event.key === 'Escape' && mentionSuggestions.value.length) {
+          event.preventDefault();
+          dismissMentions();
+          return;
+        }
+        if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+          event.preventDefault();
+          if (mentionSuggestions.value.length) selectMention();
+          else sendMessage();
+        }
+      }
+
+      async function openProfileDM() {
+        const target = profileTarget.value?.name;
+        if (!target) return;
+        const ok = await runForm(() => invoke('OpenDirectMessage', target));
+        if (ok) {
+          closeModal();
+          openConversation(target);
+        }
       }
 
       function formatTime(value) {
@@ -274,6 +631,29 @@
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return '';
         return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(date);
+      }
+
+      function formatDateTime(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+      }
+
+      function formatDuration(seconds) {
+        const total = Math.max(0, Number(seconds) || 0);
+        if (total < 60) return `${Math.round(total)} sec`;
+        if (total < 3600) return `${Math.floor(total / 60)} min`;
+        if (total < 86400) return `${Math.floor(total / 3600)} hr`;
+        return `${Math.floor(total / 86400)} d`;
+      }
+
+      function formatRelativeTime(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return 'recently';
+        const seconds = Math.max(0, (Date.now() - date.getTime()) / 1000);
+        if (seconds < 60) return 'just now';
+        return `${formatDuration(seconds)} ago`;
       }
 
       function formatTraceTime(value) {
@@ -307,14 +687,31 @@
         return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' }).format(d);
       }
 
-      function linkifyText(text) {
+      function appendMentionSegments(value, start, end, conv, out) {
+        let cursor = start;
+        const plain = value.slice(start, end);
+        const re = /(^|[\s([{\"'!?.,;:])(@[A-Za-z][A-Za-z0-9_\-\[\]\\`^{}]{0,30})(?![A-Za-z0-9_\-\[\]\\`^{}])/g;
+        let match;
+        while ((match = re.exec(plain)) !== null) {
+          const mentionStart = start + match.index + match[1].length;
+          const mentionEnd = mentionStart + match[2].length;
+          if (mentionStart > cursor) out.push({ text: value.slice(cursor, mentionStart), url: '' });
+          const nick = match[2].slice(1);
+          if (isKnownChannelNick(conv, nick)) out.push({ text: match[2], url: '', mention: nick });
+          else out.push({ text: match[2], url: '' });
+          cursor = mentionEnd;
+        }
+        if (cursor < end) out.push({ text: value.slice(cursor, end), url: '' });
+      }
+
+      function linkifyText(text, conv) {
         const value = String(text || '');
         const out = [];
         const re = /https?:\/\/[^\s<>"']+/gi;
         let cursor = 0;
         let match;
         while ((match = re.exec(value)) !== null) {
-          if (match.index > cursor) out.push({ text: value.slice(cursor, match.index), url: '' });
+          if (match.index > cursor) appendMentionSegments(value, cursor, match.index, conv, out);
           let url = match[0];
           let suffix = '';
           while (/[.,!?;:]$/.test(url)) {
@@ -326,10 +723,10 @@
             url = url.slice(0, -1);
           }
           out.push({ text: url, url });
-          if (suffix) out.push({ text: suffix, url: '' });
+          if (suffix) appendMentionSegments(suffix, 0, suffix.length, conv, out);
           cursor = match.index + match[0].length;
         }
-        if (cursor < value.length) out.push({ text: value.slice(cursor), url: '' });
+        if (cursor < value.length) appendMentionSegments(value, cursor, value.length, conv, out);
         return out.length ? out : [{ text: value, url: '' }];
       }
 
@@ -378,13 +775,18 @@
       function isMention(msg, snap) {
         const nick = String(snap.nick || '').trim().toLowerCase();
         if (!nick) return false;
-        return String(msg.text || '').toLowerCase().includes(nick);
+        const re = /(?:^|[\s([{\"'!?.,;:])@([A-Za-z][A-Za-z0-9_\-\[\]\\`^{}]{0,30})(?![A-Za-z0-9_\-\[\]\\`^{}])/gi;
+        let match;
+        while ((match = re.exec(String(msg.text || ''))) !== null) {
+          if (match[1].toLowerCase() === nick) return true;
+        }
+        return false;
       }
 
       function shouldNotify(conv, msg, snap) {
         if (!notificationPrefs.enabled || !msg || msg.historical || msg.system || String(msg.sender || '').toLowerCase() === String(snap.nick || '').toLowerCase()) return false;
         const dm = ['dm', 'virtual-dm'].includes(conv.kind);
-        return dm || isMention(msg, snap) || notificationPrefs.allChannels;
+        return dm || (isChannel(conv) && isMention(msg, snap)) || (isChannel(conv) && notificationPrefs.allChannels);
       }
 
       function ensureAudioContext() {
@@ -467,9 +869,10 @@
         if (!msg || msg.historical || msg.system || conv.kind === 'status' || String(msg.sender || '').toLowerCase() === String(snap.nick || '').toLowerCase()) return;
         const focused = document.hasFocus() && !document.hidden;
         const activelyReading = viewMode.value === 'conversation' && activeId.value === conv.id && focused && conversationVisible.value;
+        const notify = shouldNotify(conv, msg, snap);
         if (!activelyReading) unread[conv.id] = (unread[conv.id] || 0) + 1;
         if (notificationPrefs.enabled && notificationPrefs.sound && focused) playNotificationSound();
-        if (!activelyReading && shouldNotify(conv, msg, snap)) {
+        if (!activelyReading && notify) {
           if (focused && notificationPrefs.popup) showMessageToast(conv, msg);
           if (!focused && notificationPrefs.system) {
             const preview = messagePreview(msg);
@@ -499,6 +902,7 @@
       function normalizeSnapshot(raw) {
         const next = raw && typeof raw === 'object' ? raw : blankSnapshot();
         if (!Array.isArray(next.conversations)) next.conversations = [];
+        if (!next.profiles || typeof next.profiles !== 'object') next.profiles = {};
         if (!next.conversations.some(c => c.id === 'status')) next.conversations.unshift({ id: 'status', name: 'Home', kind: 'status', messages: [] });
         for (const conv of next.conversations) if (!Array.isArray(conv.messages)) conv.messages = [];
         if (!next.identityStatus) next.identityStatus = next.identified ? 'identified' : 'none';
@@ -523,7 +927,15 @@
         snapshot.value = next;
         initialized = true;
 
-        if (!next.conversations.some(c => c.id === activeId.value)) activeId.value = 'status';
+        const restored = reconnectTargetId.value && next.conversations.some(c => c.id === reconnectTargetId.value);
+        if (restored) {
+          activeId.value = reconnectTargetId.value;
+          reconnectTargetId.value = '';
+          viewMode.value = 'conversation';
+          unread[activeId.value] = 0;
+        } else if (!reconnectTargetId.value && !next.conversations.some(c => c.id === activeId.value)) {
+          activeId.value = 'status';
+        }
         if (next.captchaWord && modal.value !== 'captcha') {
           modal.value = 'captcha';
           formError.value = '';
@@ -535,6 +947,7 @@
       }
 
       async function openConversation(id) {
+        if (id !== reconnectTargetId.value) reconnectTargetId.value = '';
         const conv = conversations.value.find(c => c.id === id);
         activeId.value = id;
         viewMode.value = 'conversation';
@@ -660,7 +1073,7 @@
         const message = actionMessage.value;
         if (!message) return;
         closeModal();
-        const prefix = `${message.sender}: `;
+        const prefix = `@${message.sender} `;
         if (!draft.value.startsWith(prefix)) draft.value = prefix + draft.value;
         normalizeDraft();
         nextTick(() => messageInput.value?.focus());
@@ -693,6 +1106,7 @@
 
       function closeModal() {
         modal.value = '';
+        profileTarget.value = null;
         formError.value = '';
         busy.value = false;
       }
@@ -774,6 +1188,7 @@
           openModal('connect');
           return;
         }
+        reconnectTargetId.value = viewMode.value === 'conversation' && isChannel(selectedConversation.value) ? activeId.value : '';
         formError.value = '';
         busy.value = true;
         const cfg = {
@@ -794,7 +1209,6 @@
           await invoke('Connect', cfg);
           connection.serverPassword = '';
           connection.identityPassword = '';
-          openConversation('status');
           showToast(`Reconnecting to ${connection.serverLabel || connection.host}…`);
         } catch (err) {
           formError.value = errorText(err);
@@ -877,7 +1291,6 @@
       }
 
       function normalizeDraft() {
-        if (/[\r\n]/.test(draft.value)) draft.value = draft.value.replace(/[\r\n]+/g, ' ');
         nextTick(() => {
           const el = messageInput.value;
           if (!el) return;
@@ -899,6 +1312,9 @@
         try {
           await invoke('SendMessage', conv.id, text);
           draft.value = '';
+          composerCursor.value = 0;
+          mentionDismissed.value = false;
+          mentionIndex.value = 0;
           normalizeDraft();
           nextTick(() => messageInput.value?.focus());
         } catch (err) {
@@ -1189,9 +1605,13 @@
       });
       watch(notificationPrefs, saveNotificationPrefs, { deep: true });
       watch(appearancePrefs, saveAppearancePrefs, { deep: true });
+      watch(mentionSuggestions, suggestions => {
+        if (mentionIndex.value >= suggestions.length) mentionIndex.value = 0;
+      });
 
       onMounted(async () => {
         await bootstrap();
+        loadCapybaraAssets();
         eventCancels.push(native.on('ircapybara:state', next => applySnapshot(next, true)));
         eventCancels.push(native.on('ircapybara:transfer', handleTransferUpdate));
         eventCancels.push(native.on('ircapybara:trace', entry => {
@@ -1240,7 +1660,7 @@
       });
 
       return {
-        snapshot, activeId, viewMode, platform, isMobile, mobilePane, actionMessage, awayFromLatest, arrivedBelow, theme, draft, modal, formError, busy, settingsTab, memberLoading, appFocused,
+        snapshot, activeId, viewMode, platform, isMobile, mobilePane, actionMessage, awayFromLatest, arrivedBelow, theme, draft, modal, profileTarget, profileDetails, formError, busy, settingsTab, memberLoading, appFocused,
         identityNick, identityPassword, captchaAnswer, chatTarget, helpTopic,
         connection, messagesEl, messageInput, protocolEl, unread, downloadStates, toasts,
         protocolTrace, notificationPrefs, appearancePrefs,
@@ -1248,13 +1668,14 @@
         isConnected, canIdentify, canOpenChats, canCompose, canAttach, canSend,
         canRequestHistory, codePointCount, totalUnread, canReconnect, themeTitle,
         serverLabel, statusLabel, statusClass, identityLabel, headerTitle, headerSubtitle,
-        headerIcon, emptyTitle, emptyCopy, composerPlaceholder, composerHint, banner,
-        compactCount, avatarLetters, capybaraAvatar, kindLabel, conversationIcon, formatTime, formatTraceTime,
+        headerIcon, emptyTitle, emptyCopy, composerPlaceholder, composerHint, banner, mentionSuggestions, mentionIndex,
+        compactCount, avatarLetters, capybaraAvatar, kindLabel, conversationIcon, isOperator, openProfile, openProfileDM, profilePresence, profileLastSeen, formatTime, formatDateTime, formatTraceTime,
         showDaySeparator, formatDay, linkifyText, openExternalLink, formatBytes, fileBadge, lastPreview,
         openConversation, openOverview, showList, onMessagesScroll, jumpToLatest, firstLink, isOwnMessage,
         openMessageActions, copyActionMessage, mentionActionSender, messageActionSender, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
         solveCaptcha, openChat, requestHistory, refreshChannels, requestHelp, resetAI, normalizeDraft,
         sendMessage, pickAndUpload, downloadAttachment, restartAttachment, transferState, transferIsBusy, transferStatusLabel, transferButtonLabel, transferButtonIcon, pickTLSCertificate, toggleTheme,
+        syncComposerCursor, handleComposerInput, handleComposerKeydown, selectMention,
         openProtocolLog, copyProtocolLog, systemNotificationChanged, testNotificationSound, testInAppNotification, bannerAction,
       };
     },

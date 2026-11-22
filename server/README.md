@@ -4,6 +4,10 @@ IRCapybara is a small, opinionated single-server IRC implementation in Go. It us
 
 See `SPEC.md` for protocol behavior and acceptance criteria.
 
+## License
+
+The server is licensed under the [Business Source License 1.1](LICENSE). The Additional Use Grant permits non-commercial personal production use with fewer than 10,000 monthly active users. Enterprise production use requires a separate commercial license from the licensor while the Business Source License applies.
+
 ## Build
 
 Direct Go dependencies are `github.com/glebarez/go-sqlite` for pure-Go SQLite, `github.com/kkdai/youtube/v2` for the optional YouTube plugin, and `github.com/u2takey/ffmpeg-go` as a pure-Go FFmpeg process wrapper. The server still builds with `CGO_ENABLED=0`; FFmpeg itself is an external static executable in Docker rather than a CGO library.

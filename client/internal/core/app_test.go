@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"ircapybara/client/internal/conversation"
 	"ircapybara/client/internal/session"
 )
 
@@ -207,20 +208,13 @@ func (h *recordingHost) waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func (h *recordingHost) conversation(id string) (found struct {
-	joined   bool
-	messages []string
-}, ok bool) {
+func (h *recordingHost) conversation(id string) (conversation.Conversation, bool) {
 	for _, conv := range h.state.Conversations {
 		if conv.ID == id {
-			found.joined = conv.Joined
-			for _, m := range conv.Messages {
-				found.messages = append(found.messages, m.Sender+": "+m.Text)
-			}
-			return found, true
+			return conv, true
 		}
 	}
-	return found, false
+	return conversation.Conversation{}, false
 }
 
 func connectTestApp(t *testing.T, host Host, server *fakeServer) *App {
@@ -237,7 +231,7 @@ func connectTestApp(t *testing.T, host Host, server *fakeServer) *App {
 func TestSessionLifecycleThroughHost(t *testing.T) {
 	server := newFakeServer(t, func(s *fakeServer, line string) {
 		if registration(s, line) && line == "JOIN #general" {
-			s.send("@time=2026-01-02T03:04:05Z :bob!bob@host PRIVMSG #general :hello alice")
+			s.send("@time=2026-01-02T03:04:05Z :bob!bob@host PRIVMSG #general :hello alice\u2028second line")
 		}
 	})
 	host := newRecordingHost(t)
@@ -245,8 +239,12 @@ func TestSessionLifecycleThroughHost(t *testing.T) {
 
 	host.waitFor(t, "ready session with a joined #general and bob's message", func() bool {
 		conv, ok := host.conversation("#general")
-		return host.state.State == session.Ready && host.state.Extended && ok && conv.joined &&
-			len(conv.messages) == 1 && conv.messages[0] == "bob: hello alice"
+		if host.state.State != session.Ready || !host.state.Extended || !ok || !conv.Joined || len(conv.Messages) != 2 {
+			return false
+		}
+		join, message := conv.Messages[0], conv.Messages[1]
+		return join.System && join.Sender == "alice" && join.Text == "joined the channel" &&
+			message.Sender == "bob" && message.Text == "hello alice\nsecond line"
 	})
 
 	boot := app.Bootstrap()
@@ -257,10 +255,12 @@ func TestSessionLifecycleThroughHost(t *testing.T) {
 		t.Fatalf("settings were not persisted to the configured directory: %+v", boot.Settings)
 	}
 
-	if err := app.SendMessage("#general", "hi bob"); err != nil {
+	if err := app.SendMessage("#general", "hi bob\nsecond line"); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	host.waitFor(t, "the server to receive the message", func() bool { return server.saw("PRIVMSG #general :hi bob") })
+	host.waitFor(t, "the server to receive the multiline message", func() bool {
+		return server.saw("PRIVMSG #general :hi bob\u2028second line")
+	})
 
 	server.closeConn()
 	host.waitFor(t, "the remote close to surface as a disconnect", func() bool {
@@ -366,7 +366,15 @@ func TestDownloadIsPublishedThroughHost(t *testing.T) {
 	app := connectTestApp(t, host, server)
 	host.waitFor(t, "the attachment message", func() bool {
 		conv, ok := host.conversation("#general")
-		return host.state.State == session.Ready && host.state.Extended && ok && len(conv.messages) == 1
+		if host.state.State != session.Ready || !host.state.Extended || !ok {
+			return false
+		}
+		for _, message := range conv.Messages {
+			if message.Attachment != nil && message.Attachment.FileID == "f1" {
+				return true
+			}
+		}
+		return false
 	})
 
 	if err := app.DownloadAttachment("f1"); err != nil {

@@ -311,6 +311,31 @@ func TestJOINAcceptsCommaSeparatedChannels(t *testing.T) {
 	}
 }
 
+func TestGuardedJOINAllowsOnlyTwoTargetsPerMinute(t *testing.T) {
+	conn := &memoryConn{}
+	c := &model.Client{Conn: conn, RemoteIP: net.ParseIP("127.0.0.1"), Nick: "alice", Username: "alice", Registered: true}
+	s := newRegistrationTestServer(c)
+	s.protection.SetGuard(2, protection.GuardSnapshot{})
+	for _, name := range []string{"#one", "#two", "#three"} {
+		s.channels[name] = &model.Channel{
+			Name: name, Norm: name, Members: make(map[*model.Client]*model.Membership), Invited: make(map[*model.Client]bool),
+			Participants: make(map[string]struct{}), SessionParticipants: make(map[*model.Client]struct{}),
+		}
+	}
+	if disconnect, _ := s.cmdJOIN(c, "#one,#two"); disconnect {
+		t.Fatal("guarded JOIN must not disconnect")
+	}
+	if disconnect, _ := s.cmdJOIN(c, "#three"); disconnect {
+		t.Fatal("rate-limited JOIN must not disconnect")
+	}
+	if _, ok := s.channels["#three"].Members[c]; ok {
+		t.Fatal("guard level 2 must stop a user after two channel joins per minute")
+	}
+	if !strings.Contains(conn.String(), "2 channel joins per minute") {
+		t.Fatalf("expected guarded JOIN notice, got %q", conn.String())
+	}
+}
+
 func TestLongPRIVMSGUpTo32768Runes(t *testing.T) {
 	senderConn := &memoryConn{}
 	receiverConn := &memoryConn{}

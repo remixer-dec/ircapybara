@@ -147,15 +147,18 @@ func (s *Store) AddMessage(convID, name string, kind Kind, m Message) {
 	appendBounded(c, m, s.maxMessages)
 }
 
-// AddHistoricalMessage deduplicates replayed history. Core HISTORY currently
-// has no stable message IDs/timestamps, so sender+target+text is intentionally
-// used only while a message is known to be a replay, never for live traffic.
+// AddHistoricalMessage merges a replay into the existing conversation. History
+// is usually older than the live messages already displayed, so it must be
+// inserted into the timeline rather than appended to it. Replays have no
+// stable IDs in the core protocol, therefore the message identity fallback is
+// deliberately used while importing history, but never when adding live
+// traffic.
 func (s *Store) AddHistoricalMessage(convID, name string, kind Kind, m Message) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.ensureLocked(convID, name, kind)
 	for i := range c.Messages {
-		if !c.Messages[i].Historical {
+		if c.Messages[i].System {
 			continue
 		}
 		if sameHistoricalMessage(c.Messages[i], m) {
@@ -163,13 +166,13 @@ func (s *Store) AddHistoricalMessage(convID, name string, kind Kind, m Message) 
 		}
 	}
 	m.Historical = true
-	appendBounded(c, m, s.maxMessages)
+	insertHistorical(c, m, s.maxMessages)
 	return true
 }
 
 func sameHistoricalMessage(a, b Message) bool {
-	if a.DedupeKey != "" || b.DedupeKey != "" {
-		return a.DedupeKey != "" && b.DedupeKey != "" && a.DedupeKey == b.DedupeKey
+	if a.DedupeKey != "" && b.DedupeKey != "" {
+		return a.DedupeKey == b.DedupeKey
 	}
 	if !strings.EqualFold(a.Target, b.Target) || !strings.EqualFold(a.Sender, b.Sender) || a.Text != b.Text {
 		return false
@@ -181,6 +184,36 @@ func sameHistoricalMessage(a, b Message) bool {
 		return a.Attachment.FileID == b.Attachment.FileID && a.Attachment.Filename == b.Attachment.Filename
 	}
 	return true
+}
+
+func insertHistorical(c *Conversation, m Message, max int) {
+	index := len(c.Messages)
+	if m.DedupeKey != "" && !m.Time.IsZero() {
+		// Tagged history has a server-provided timestamp. Use it to merge into
+		// the complete timeline, including any previously imported history.
+		for i, existing := range c.Messages {
+			if !existing.Time.IsZero() && existing.Time.After(m.Time) {
+				index = i
+				break
+			}
+		}
+	} else {
+		// Legacy core HISTORY has no timestamp. Its replay is ordered oldest
+		// first, so keep it ahead of live messages already in the store.
+		for i, existing := range c.Messages {
+			if !existing.Historical {
+				index = i
+				break
+			}
+		}
+	}
+
+	c.Messages = append(c.Messages, Message{})
+	copy(c.Messages[index+1:], c.Messages[index:])
+	c.Messages[index] = m
+	if len(c.Messages) > max {
+		c.Messages = append([]Message(nil), c.Messages[len(c.Messages)-max:]...)
+	}
 }
 
 func appendBounded(c *Conversation, m Message, max int) {

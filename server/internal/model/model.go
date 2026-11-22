@@ -98,6 +98,7 @@ type Client struct {
 	LastActivity     time.Time
 	Tokens           float64
 	TokenUpdated     time.Time
+	JoinTimes        []time.Time
 	XferTokens       float64
 	XferTokenUpdated time.Time
 }

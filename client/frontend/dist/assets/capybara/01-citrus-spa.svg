@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">Citrus Spa — capybara profile picture</title>
+<desc id="desc">Editable vector capybara with citrus spa accessories. Color palette is in the style block.</desc>
+<!-- COLOR PALETTE: edit hex values here. Shared classes recolor matching parts together. -->
+<style>
+    .bg { fill: #DBE9CB; }
+    .fur { fill: #B98C64; }
+    .shade { fill: #906442; }
+    .muzzle { fill: #CCA57B; }
+    .ink { fill: #46352E; }
+    .blush { fill: #D99780; }
+    .accent { fill: #EF963D; }
+    .accent2 { fill: #709658; }
+    .line { fill:none; }
+    .star { fill:none; stroke: #EF963D; stroke-width:5; }
+</style>
+<defs><clipPath id="canvas"><rect width="512" height="512" rx="96"/></clipPath></defs>
+<g clip-path="url(#canvas)">
+<rect id="background" class="bg" width="512" height="512"/>
+<circle cx="256" cy="259" r="199" fill="#FFFFFF" opacity=".16"/>
+<g stroke="#46352E" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+<g id="decoration"><path class="star" d="M105 276v20m-10-10h20M406 320v16m-8-8h16" /></g>
+<g id="accessory-back"></g>
+<g id="body"><path class="fur" d="M147 479q-4-73 45-104h127q52 31 55 104Z" /></g>
+<g id="head"><ellipse class="fur" cx="189" cy="198" rx="29" ry="35" /><ellipse class="fur" cx="331" cy="189" rx="27" ry="33" /><ellipse class="shade" cx="191" cy="199" rx="12" ry="18" stroke="none"/><ellipse class="shade" cx="331" cy="190" rx="11" ry="16" stroke="none"/><path class="fur" d="M186 209q13-33 72-33 83-2 102 67 14 25 15 62 29 21 28 52-2 47-60 55l-135-2q-58-8-57-62l1-78q0-37 34-61Z" /><path class="muzzle" d="M237 305q42-11 95-4 57 6 58 43 0 45-52 47l-97-2q-33-2-34-33-2-35 30-51Z" stroke="none"/></g>
+<g id="face"><ellipse class="ink" cx="222" cy="269" rx="7" ry="9" stroke="none"/><ellipse class="ink" cx="312" cy="265" rx="7" ry="9" stroke="none"/><ellipse class="ink" cx="352" cy="326" rx="8" ry="5" stroke="none"/><path class="line" d="M347 350q-16 10-32 0" /><ellipse class="blush" cx="194" cy="307" rx="17" ry="9" stroke="none"/><path class="line" d="M177 345l-10-3m12 17-11 2" /></g>
+<g id="accessory-front"><path class="accent2" d="M137 404q115-34 239 0v51H137Z" /><path class="line" d="M175 423q80-17 158 0" /></g>
+<g id="headwear"><ellipse class="accent" cx="275" cy="143" rx="39" ry="35" /><path class="line" d="M275 110q-1-16 11-24" /><path class="accent2" d="M281 105q24-29 43-8-20 22-43 8" /><path class="line" d="M255 134l1 0m35-3 1 0" /></g>
+</g></g></svg>

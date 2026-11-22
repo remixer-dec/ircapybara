@@ -59,3 +59,17 @@ func TestLargeMessageLimit(t *testing.T) {
 		t.Fatal("message over 32768 runes must be rejected")
 	}
 }
+
+func TestMultilineMessageEncoding(t *testing.T) {
+	text := "first line\nsecond line\r\nthird line"
+	wire := EncodeMessageText(text)
+	if strings.ContainsAny(wire, "\r\n") {
+		t.Fatal("encoded message must remain on one IRC line")
+	}
+	if got := DecodeMessageText(wire); got != "first line\nsecond line\nthird line" {
+		t.Fatalf("decoded message = %q", got)
+	}
+	if !ValidMessageText(wire, MaxMessageRunes) {
+		t.Fatal("encoded multiline message should pass message validation")
+	}
+}

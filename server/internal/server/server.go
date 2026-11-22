@@ -399,10 +399,10 @@ func (s *Server) numeric(c *model.Client, code string, args string) {
 }
 
 func (s *Server) notice(c *model.Client, text string) {
-	if !protocol.ValidText(text, protocol.MaxMessageRunes) {
+	if !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return
 	}
-	s.sendLine(c, fmt.Sprintf(":%s NOTICE %s :%s", s.cfg.ServerName, s.target(c), text))
+	s.sendLine(c, fmt.Sprintf(":%s NOTICE %s :%s", s.cfg.ServerName, s.target(c), protocol.EncodeMessageText(text)))
 }
 
 func (s *Server) sendError(c *model.Client, text string) { s.sendLine(c, "ERROR :"+text) }

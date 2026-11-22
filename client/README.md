@@ -43,7 +43,7 @@ The frontend reaches Go only through `frontend/dist/bridge.js` (`IRCapybaraNativ
 - Persistent nickname identification UI, including the optional explicit nickname form.
 - Public/private channel conversation kinds, normal DMs, virtual/plugin DMs, plugin-capable conversation model, and server/status messages.
 - Synthetic senders are rendered as services and are never assumed to be WHOIS-able.
-- 32,768-code-point message limit without automatic splitting; transport accepts approximately 132 KiB IRC lines.
+- 32,768-code-point message limit with multiline text preserved through a private line-separator encoding; transport accepts approximately 132 KiB IRC lines.
 - IRCv3 tags, prefixes, numerics, trailing parameters, unknown tags, unknown numerics, and unknown commands are parsed conservatively.
 - `server-time` and `ircapybara-history=1` are understood; historical plugin messages do not increment frontend unread counters.
 - Dynamic `HELP` request UI with 704/705/706 and 524 handling.
@@ -69,13 +69,14 @@ Below 720 px the frontend switches to a phone layout: the conversation list and 
 
 ## Build (desktop)
 
-Prerequisites: Go 1.27+ and Wails v2 tooling for the desktop platform.
+Use Go 1.27 or newer and the [Wails v2 platform prerequisites](https://v2.wails.io/docs/gettingstarted/installation/).
 
 ```bash
-go mod tidy
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
 wails build
 ```
+
+On Linux with WebKitGTK 4.1, install the GTK 3 and WebKitGTK 4.1 development packages and run `wails build -tags webkit2_41`. The Windows build uses WebView2. The macOS release supports Intel and Apple silicon and requires macOS 13 or later with Go 1.27.
 
 There is no `npm install` step.
 
@@ -108,3 +109,7 @@ All server/plugin/message content is treated as untrusted text. The Vue template
 The core packages are pure Go; there is no `import "C"` or CGO code in IRCapybara itself. The Wails shell and the Android shell stay at the application boundary (both have platform-native build requirements of their own).
 
 The plan for IRCv3 support, including what it changes in this client, is in [../docs/IRCV3.md](../docs/IRCV3.md).
+
+## License
+
+The IRCapybara client is licensed under [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](LICENSE). See the [third-party notices](THIRD_PARTY_NOTICES.md) for the vendored Vue runtime.

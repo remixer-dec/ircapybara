@@ -49,7 +49,7 @@
   <div id="app" v-cloak class="app-shell">
     <aside class="sidebar" aria-label="Conversations">
       <div class="server-card">
-        <img class="brand-avatar large" src="./assets/capybara/capybara-1.svg" alt="" draggable="false" />
+        <img class="brand-avatar large app-logo" src="./assets/capybara/capybara-1.svg" alt="IRCapybara" draggable="false" />
         <div class="server-copy">
           <strong>{{ serverLabel }}</strong>
           <span class="status-line"><i :class="['status-dot', statusClass]"></i><span>{{ statusLabel }}</span></span>
@@ -113,12 +113,6 @@
           <button v-if="!isConnected" class="primary-button sidebar-connect" type="button" :disabled="busy" @click="canReconnect ? reconnect() : openModal('connect')">{{ canReconnect ? 'Reconnect' : 'Connect to a server' }}</button>
         </div>
 
-        <div class="nav-section utilities">
-          <div class="section-label"><span>Tools</span></div>
-          <button class="nav-row" type="button" :disabled="!isConnected" @click="openModal('help')"><span class="nav-icon"><svg class="icon"><use href="#i-help"></use></svg></span><span>Server Help</span></button>
-          <button class="nav-row" type="button" @click="openProtocolLog"><span class="nav-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span><span>Protocol Log</span></button>
-          <button class="nav-row" type="button" :disabled="!isConnected" @click="resetAI"><span class="nav-icon"><svg class="icon"><use href="#i-reset"></use></svg></span><span>Reset AI Conversation</span></button>
-        </div>
       </div>
 
       <div class="identity-card">
@@ -167,20 +161,21 @@
             <span v-if="unread[conv.id]" class="unread">{{ compactCount(unread[conv.id]) }}</span>
           </button>
         </div>
-        <div v-else class="empty-state compact-empty"><div><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><h2>No chats yet</h2><p>Connect to load the server's channel catalogue, or open a direct-message target.</p></div></div>
+        <div v-else class="empty-state compact-empty"><div><img class="empty-capy" :src="capybaraAvatar('empty-state')" alt="" draggable="false" /><h2>No chats yet</h2><p>Connect to load the server's channel catalogue, or open a direct-message target.</p></div></div>
       </section>
 
       <section v-else ref="messagesEl" class="messages" aria-live="polite" @scroll.passive="onMessagesScroll">
         <div v-if="!selectedConversation || !selectedConversation.messages.length" class="empty-state">
-          <div class="empty-state-card"><img class="empty-capy" src="./assets/capybara/capybara-2.svg" alt="" draggable="false" /><span class="empty-kicker">{{ isConnected ? 'IRCapybara' : (isMobile ? 'Mobile client' : 'Desktop client') }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><div v-if="!isConnected" class="empty-actions"><button v-if="canReconnect" class="primary-button empty-action" type="button" :disabled="busy" @click="reconnect"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ busy ? 'Reconnecting…' : 'Reconnect' }}</button><button :class="canReconnect ? 'secondary-button' : 'primary-button'" type="button" @click="openModal('connect')">Connection settings</button></div></div>
+          <div class="empty-state-card"><img class="empty-capy" :src="capybaraAvatar('empty-state')" alt="" draggable="false" /><span class="empty-kicker">{{ isConnected ? 'IRCapybara' : (isMobile ? 'Mobile client' : 'Desktop client') }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><div v-if="!isConnected" class="empty-actions"><button v-if="canReconnect" class="primary-button empty-action" type="button" :disabled="busy" @click="reconnect"><svg class="icon button-icon"><use href="#i-refresh"></use></svg>{{ busy ? 'Reconnecting…' : 'Reconnect' }}</button><button :class="canReconnect ? 'secondary-button' : 'primary-button'" type="button" @click="openModal('connect')">Connection settings</button></div></div>
         </div>
         <template v-for="(message, index) in selectedConversation?.messages || []" :key="message.id">
           <div v-if="showDaySeparator(index, selectedConversation.messages)" class="day-separator"><span>{{ formatDay(message.time) }}</span></div>
           <article :class="['message', {synthetic: message.synthetic, system: message.system, historical: message.historical}]" :data-message-id="message.id" :data-longpress="message.text ? '' : null" @contextmenu="message.text && ($event.preventDefault(), openMessageActions(message))">
-            <div class="message-avatar" aria-hidden="true"><img v-if="appearancePrefs.capybaraAvatars && !message.system" :src="capybaraAvatar(message.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(message.sender) }}</span></div>
+            <button v-if="!message.system && !message.synthetic" class="message-avatar message-profile-trigger" type="button" aria-label="Open user profile" @click="openProfile(message.sender)"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(message.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(message.sender) }}</span></button>
+            <div v-else class="message-avatar" aria-hidden="true"><img v-if="appearancePrefs.capybaraAvatars && !message.system" :src="capybaraAvatar(message.sender)" alt="" draggable="false" /><span v-else>{{ avatarLetters(message.sender) }}</span></div>
             <div class="message-body">
-              <div class="message-meta"><strong>{{ message.sender }}</strong><span v-if="message.synthetic" class="synthetic-badge">service</span><span v-if="message.historical" class="history-badge">history</span></div>
-              <div v-if="message.text" class="message-text"><template v-for="(segment, segmentIndex) in linkifyText(message.text)" :key="segmentIndex"><a v-if="segment.url" class="message-link" :href="segment.url" @click.prevent="openExternalLink(segment.url)">{{ segment.text }}</a><span v-else>{{ segment.text }}</span></template></div>
+              <div class="message-meta"><button v-if="!message.system && !message.synthetic" class="message-profile-name" type="button" @click="openProfile(message.sender)">{{ message.sender }}</button><strong v-else>{{ message.sender }}</strong><span v-if="message.synthetic" class="synthetic-badge">service</span><span v-if="isOperator(message, selectedConversation)" class="operator-badge">OP</span></div>
+              <div v-if="message.text" class="message-text"><template v-for="(segment, segmentIndex) in linkifyText(message.text, selectedConversation)" :key="segmentIndex"><a v-if="segment.url" class="message-link" :href="segment.url" @click.prevent="openExternalLink(segment.url)">{{ segment.text }}</a><button v-else-if="segment.mention" class="message-mention" type="button" @click="openProfile(segment.mention)">{{ segment.text }}</button><span v-else>{{ segment.text }}</span></template></div>
               <div v-if="message.attachment" :class="['attachment-card', `transfer-${transferState(message.attachment).status}`]">
                 <div class="file-icon">{{ fileBadge(message.attachment.mime) }}</div>
                 <div class="file-copy">
@@ -208,9 +203,15 @@
       <section v-if="viewMode === 'conversation' && canCompose" class="composer-wrap">
         <div class="composer">
           <button class="attach-button" type="button" title="Attach file" aria-label="Attach file" :disabled="!canAttach" @click="pickAndUpload"><svg class="icon"><use href="#i-paperclip"></use></svg></button>
-          <textarea ref="messageInput" v-model="draft" rows="1" maxlength="131072" enterkeyhint="send" autocorrect="on" autocapitalize="sentences" spellcheck="true" :placeholder="composerPlaceholder" @input="normalizeDraft" @keydown.enter.exact.prevent="sendMessage"></textarea>
+          <textarea ref="messageInput" v-model="draft" rows="1" maxlength="131072" enterkeyhint="send" autocorrect="on" autocapitalize="sentences" spellcheck="true" :placeholder="composerPlaceholder" @input="handleComposerInput" @click="syncComposerCursor" @keyup="syncComposerCursor" @keydown="handleComposerKeydown"></textarea>
           <span :class="['char-count', {warn: codePointCount > 30000, danger: codePointCount > 32768}]">{{ codePointCount ? `${codePointCount.toLocaleString()} / 32,768` : '' }}</span>
           <button class="send-button" type="button" aria-label="Send message" :disabled="!canSend" @click="sendMessage"><svg class="icon"><use href="#i-send"></use></svg></button>
+        </div>
+        <div v-if="mentionSuggestions.length" class="mention-menu" role="listbox" aria-label="Mention a nickname">
+          <button v-for="(suggestion, index) in mentionSuggestions" :key="suggestion.nick" :class="['mention-option', {active: index === mentionIndex}]" type="button" role="option" :aria-selected="index === mentionIndex" @mousedown.prevent="selectMention(suggestion.nick)">
+            <span class="mention-avatar"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(suggestion.nick)" alt="" draggable="false" /><span v-else>{{ avatarLetters(suggestion.nick) }}</span></span>
+            <span class="mention-copy"><strong>@{{ suggestion.nick }}</strong><small>{{ suggestion.everyone ? 'Mention everyone in this channel' : (suggestion.operator ? 'Channel operator' : (suggestion.online ? 'Online' : 'Seen in chat')) }}</small></span>
+          </button>
         </div>
         <div class="composer-hint">{{ composerHint }}</div>
       </section>
@@ -252,6 +253,32 @@
           <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? 'Sending…' : 'Identify' }}</button></div>
           <p class="form-error">{{ formError }}</p>
         </form>
+      </div>
+    </transition>
+
+    <transition name="modal-fade">
+      <div v-if="modal === 'profile' && profileTarget" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-title" @click.self="closeModal">
+        <div class="modal-card compact profile-card">
+          <div class="modal-header"><div><span class="eyebrow">Profile</span><h2 id="profile-title">{{ profileDetails?.name || profileTarget.name }}</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+          <div class="profile-summary">
+            <img v-if="appearancePrefs.capybaraAvatars" class="profile-avatar" :src="capybaraAvatar(profileTarget.name)" alt="" draggable="false" />
+            <span v-else class="profile-avatar profile-initials">{{ avatarLetters(profileTarget.name) }}</span>
+            <div><strong>{{ profileDetails?.name || profileTarget.name }}</strong><span v-if="profileDetails?.operator || profileTarget.operator" class="operator-badge">OP</span><p><i :class="['status-dot', profileDetails?.online ? 'online' : 'offline']"></i>{{ profilePresence(profileDetails) }}</p></div>
+          </div>
+          <p v-if="profileDetails?.loading" class="profile-loading">Loading live WHOIS details…</p>
+          <dl class="detail-list profile-details">
+            <div><dt>Last seen</dt><dd>{{ profileLastSeen(profileDetails) }}</dd></div>
+            <div v-if="profileDetails?.realname"><dt>Real name</dt><dd>{{ profileDetails.realname }}</dd></div>
+            <div v-if="profileDetails?.username"><dt>Username</dt><dd>{{ profileDetails.username }}</dd></div>
+            <div v-if="profileDetails?.host"><dt>Host</dt><dd>{{ profileDetails.host }}</dd></div>
+            <div v-if="profileDetails?.channels?.length"><dt>Channels</dt><dd>{{ profileDetails.channels.join(', ') }}</dd></div>
+            <div><dt>Local messages</dt><dd>{{ profileDetails?.messageCount || 0 }}</dd></div>
+            <div v-if="profileDetails?.signOn"><dt>Connected since</dt><dd>{{ formatDateTime(profileDetails.signOn) }}</dd></div>
+          </dl>
+          <p v-if="profileDetails?.error" class="profile-note">{{ profileDetails.error }}</p>
+          <div class="modal-actions"><button class="secondary-button" type="button" @click="closeModal">Done</button><button class="primary-button" type="button" :disabled="busy" @click="openProfileDM"><svg class="icon button-icon"><use href="#i-chats"></use></svg>{{ busy ? 'Opening…' : 'Message' }}</button></div>
+          <p class="form-error">{{ formError }}</p>
+        </div>
       </div>
     </transition>
 
@@ -302,7 +329,7 @@
               <template v-if="settingsTab === 'appearance'">
                 <h3>Appearance</h3><p class="settings-intro">Visual preferences are local to this device.</p>
                 <div class="setting-block"><span class="setting-title">Theme</span><div class="segmented"><button :class="{active: theme === 'light'}" type="button" @click="theme !== 'light' && toggleTheme()"><svg class="icon"><use href="#i-sun"></use></svg>Light</button><button :class="{active: theme === 'dark'}" type="button" @click="theme !== 'dark' && toggleTheme()"><svg class="icon"><use href="#i-moon"></use></svg>Dark</button></div></div>
-                <label class="check-row setting-check"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="appearancePrefs.capybaraAvatars" type="checkbox" /><span><strong>Capybara avatars</strong><small>Use one of two deterministic capybara SVGs per nickname. The same nickname always receives the same avatar.</small></span></label>
+                <label class="check-row setting-check"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="appearancePrefs.capybaraAvatars" type="checkbox" /><span><strong>Capybara avatars</strong><small>Use a deterministic bundled capybara style with a nickname-seeded color palette. The same nickname always receives the same avatar.</small></span></label>
               </template>
               <template v-else-if="settingsTab === 'notifications'">
                 <h3>Notifications</h3><p class="settings-intro">Historical replay never alerts. Unread counts remain available even when notifications are disabled.</p>
@@ -318,7 +345,7 @@
               <template v-else>
                 <h3>Connection</h3><p class="settings-intro">Connection credentials are never stored.</p>
                 <dl class="detail-list"><div><dt>Server</dt><dd>{{ serverLabel }}</dd></div><div><dt>Nickname</dt><dd>{{ snapshot.nick || connection.nick || 'Not set' }}</dd></div><div><dt>State</dt><dd>{{ statusLabel }}</dd></div><div><dt>Identity</dt><dd>{{ identityLabel }}</dd></div><div><dt>Transport</dt><dd>TLS</dd></div></dl>
-                <div class="settings-actions"><button v-if="!isConnected" class="secondary-button" type="button" @click="closeModal(); openModal('connect')">Connection setup</button><button v-if="canIdentify" class="secondary-button" type="button" @click="closeModal(); openModal('identify')">Identify nickname</button><button class="secondary-button" type="button" @click="closeModal(); openProtocolLog()">Protocol log</button></div>
+                <div class="settings-actions"><button v-if="!isConnected" class="secondary-button" type="button" @click="closeModal(); openModal('connect')">Connection setup</button><button v-if="canIdentify" class="secondary-button" type="button" @click="closeModal(); openModal('identify')">Identify nickname</button><button class="secondary-button" type="button" @click="closeModal(); openProtocolLog()">Protocol log</button><button class="secondary-button" type="button" :disabled="!isConnected" @click="closeModal(); openModal('help')"><svg class="icon button-icon"><use href="#i-help"></use></svg>Server help</button><button class="secondary-button" type="button" :disabled="!isConnected" @click="closeModal(); resetAI()"><svg class="icon button-icon"><use href="#i-reset"></use></svg>Reset AI conversation</button></div>
               </template>
             </section>
           </div>

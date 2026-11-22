@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ircapybara/client/frontend"
 	"ircapybara/client/internal/conversation"
 	"ircapybara/client/internal/persist"
 	"ircapybara/client/internal/protocol"
@@ -69,7 +70,25 @@ type ClientSnapshot struct {
 	IdentityDetail string                      `json:"identityDetail,omitempty"`
 	CaptchaWord    string                      `json:"captchaWord,omitempty"`
 	CaptchaPrompt  string                      `json:"captchaPrompt,omitempty"`
+	Profiles       map[string]UserProfile      `json:"profiles,omitempty"`
 	Conversations  []conversation.Conversation `json:"conversations"`
+}
+
+// UserProfile is the small, server-provided part of a user's WHOIS record.
+// The renderer combines it with locally known message/presence history.
+type UserProfile struct {
+	Nick        string    `json:"nick"`
+	Username    string    `json:"username,omitempty"`
+	Host        string    `json:"host,omitempty"`
+	Realname    string    `json:"realname,omitempty"`
+	Channels    []string  `json:"channels,omitempty"`
+	Operator    bool      `json:"operator,omitempty"`
+	Online      bool      `json:"online"`
+	Loading     bool      `json:"loading,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	IdleSeconds int       `json:"idleSeconds,omitempty"`
+	LastActive  time.Time `json:"lastActive,omitempty"`
+	SignOn      time.Time `json:"signOn,omitempty"`
 }
 
 type Bootstrap struct {
@@ -136,6 +155,7 @@ type App struct {
 	capLSComplete        bool
 	capOffered           map[string]bool
 	historyPending       map[string]historyRequest
+	profiles             map[string]UserProfile
 
 	attachMu    sync.RWMutex
 	attachments map[string]attachmentMeta
@@ -183,6 +203,7 @@ func New(opts Options) *App {
 		namesMembers:     map[string][]conversation.Member{},
 		capOffered:       map[string]bool{},
 		historyPending:   map[string]historyRequest{},
+		profiles:         map[string]UserProfile{},
 		transferStates:   map[string]TransferUpdate{},
 		transferPercents: map[string]int{},
 		transferWarnings: map[string]bool{},
@@ -225,6 +246,11 @@ func (a *App) Bootstrap() Bootstrap {
 		settings.TLSMode = persist.TLSModeAllowSelfSigned
 	}
 	return Bootstrap{Snapshot: a.snapshot(), Settings: settings, Platform: a.platform, Transfers: a.transferSnapshot()}
+}
+
+// GetCapybaraAvatars returns the SVG artwork available in either shell.
+func (a *App) GetCapybaraAvatars() []string {
+	return frontend.CapybaraAvatars()
 }
 
 func (a *App) SetTheme(theme string) error {
@@ -334,6 +360,7 @@ func (a *App) Connect(cfg ConnectionConfig) error {
 	a.capLSComplete = false
 	a.capOffered = map[string]bool{}
 	a.historyPending = map[string]historyRequest{}
+	a.profiles = map[string]UserProfile{}
 	gen := a.generation + 1
 	a.generation = gen
 	a.mu.Unlock()
@@ -480,13 +507,10 @@ func (a *App) SendMessage(target, text string) error {
 	if text == "" {
 		return errors.New("message is empty")
 	}
-	if strings.ContainsAny(text, "\r\n") {
-		return errors.New("messages cannot contain raw newlines")
-	}
 	if utf8.RuneCountInString(text) > 32768 {
 		return errors.New("message exceeds 32,768 Unicode characters")
 	}
-	line := "PRIVMSG " + target + " :" + text
+	line := "PRIVMSG " + target + " :" + protocol.EncodeMessageText(text)
 	if len(line)+2 > transport.MaxLineBytes {
 		return errors.New("encoded IRC line exceeds transport limit")
 	}
@@ -560,6 +584,56 @@ func (a *App) RequestMembers(target string) error {
 	delete(a.namesMembers, strings.ToLower(target))
 	a.mu.Unlock()
 	return a.send("NAMES " + target)
+}
+
+// RequestProfile asks the server for the live WHOIS record for a nickname.
+// The result arrives asynchronously as standard IRC numerics and is included
+// in the next client snapshot.
+func (a *App) RequestProfile(nick string) error {
+	nick = strings.TrimSpace(nick)
+	if !validIRCAtom(nick) || strings.HasPrefix(nick, "#") {
+		return errors.New("invalid nickname")
+	}
+	if !a.sess.Snapshot().Registered {
+		return errors.New("connect to the server first")
+	}
+	a.mu.Lock()
+	if a.profiles == nil {
+		a.profiles = map[string]UserProfile{}
+	}
+	a.profiles[strings.ToLower(nick)] = UserProfile{Nick: nick, Loading: true}
+	a.mu.Unlock()
+	if err := a.send("WHOIS " + nick); err != nil {
+		a.mu.Lock()
+		profile := a.profiles[strings.ToLower(nick)]
+		profile.Nick, profile.Loading, profile.Error = nick, false, err.Error()
+		a.profiles[strings.ToLower(nick)] = profile
+		a.mu.Unlock()
+		a.emitState()
+		return err
+	}
+	a.emitState()
+	return nil
+}
+
+func (a *App) updateProfile(nick string, update func(*UserProfile)) {
+	nick = strings.TrimSpace(nick)
+	if nick == "" || update == nil {
+		return
+	}
+	key := strings.ToLower(nick)
+	a.mu.Lock()
+	if a.profiles == nil {
+		a.profiles = map[string]UserProfile{}
+	}
+	profile := a.profiles[key]
+	if profile.Nick == "" {
+		profile.Nick = nick
+	}
+	update(&profile)
+	a.profiles[key] = profile
+	a.mu.Unlock()
+	a.emitState()
 }
 
 func (a *App) GetProtocolTrace() []ProtocolTraceEntry {
@@ -1038,9 +1112,12 @@ func (a *App) handleLine(line string) {
 		if msg.Prefix != nil && len(msg.Params) > 0 {
 			target := msg.Params[0]
 			if strings.HasPrefix(target, "#") {
+				a.convs.Ensure(target, displayTarget(target), conversation.PublicChannel)
 				a.convs.UpdateMemberPresence(target, msg.Prefix.Name, true, false)
+				a.convs.AddMessage(target, displayTarget(target), conversation.PublicChannel, conversation.Message{
+					ID: a.nextID(), Target: target, Sender: msg.Prefix.Name, Text: "joined the channel", Time: time.Now(), System: true,
+				})
 				if strings.EqualFold(msg.Prefix.Name, a.sess.Snapshot().Nick) {
-					a.convs.Ensure(target, displayTarget(target), conversation.PublicChannel)
 					a.convs.SetJoined(target, true)
 					a.rememberJoinedChannel(target)
 					_ = a.send("NAMES " + target)
@@ -1054,7 +1131,15 @@ func (a *App) handleLine(line string) {
 	case "PART":
 		if msg.Prefix != nil && len(msg.Params) > 0 {
 			target := msg.Params[0]
+			if strings.HasPrefix(target, "#") {
+				a.convs.Ensure(target, displayTarget(target), conversation.PublicChannel)
+			}
 			a.convs.UpdateMemberPresence(target, msg.Prefix.Name, false, false)
+			if strings.HasPrefix(target, "#") {
+				a.convs.AddMessage(target, displayTarget(target), conversation.PublicChannel, conversation.Message{
+					ID: a.nextID(), Target: target, Sender: msg.Prefix.Name, Text: "left the channel", Time: time.Now(), System: true,
+				})
+			}
 			if strings.EqualFold(msg.Prefix.Name, a.sess.Snapshot().Nick) {
 				if _, ok := a.convs.Get(target); ok {
 					a.convs.SetJoined(target, false)
@@ -1088,6 +1173,69 @@ func (a *App) handleLine(line string) {
 				a.forgetJoinedChannel(target)
 			}
 			a.emitState()
+		}
+	case "311":
+		// RPL_WHOISUSER: <me> <nick> <user> <host> * :<real name>
+		if len(msg.Params) >= 5 {
+			nick := msg.Params[1]
+			a.updateProfile(nick, func(profile *UserProfile) {
+				profile.Username = msg.Params[2]
+				profile.Host = msg.Params[3]
+				profile.Realname = msg.Trailing()
+				profile.Online = true
+				profile.Error = ""
+			})
+		}
+	case "313":
+		// RPL_WHOISOPERATOR: <me> <nick> :operator description
+		if len(msg.Params) >= 2 {
+			a.updateProfile(msg.Params[1], func(profile *UserProfile) {
+				profile.Operator = true
+				profile.Online = true
+			})
+		}
+	case "317":
+		// RPL_WHOISIDLE: <me> <nick> <seconds idle> <sign-on unix time>
+		if len(msg.Params) >= 4 {
+			nick := msg.Params[1]
+			idle, idleErr := strconv.Atoi(msg.Params[2])
+			signon, signonErr := strconv.ParseInt(msg.Params[3], 10, 64)
+			a.updateProfile(nick, func(profile *UserProfile) {
+				if idleErr == nil && idle >= 0 {
+					profile.IdleSeconds = idle
+					profile.LastActive = time.Now().Add(-time.Duration(idle) * time.Second)
+				}
+				if signonErr == nil && signon > 0 {
+					profile.SignOn = time.Unix(signon, 0)
+				}
+				profile.Online = true
+			})
+		}
+	case "318":
+		// RPL_ENDOFWHOIS: the live profile request is complete.
+		if len(msg.Params) >= 2 {
+			a.updateProfile(msg.Params[1], func(profile *UserProfile) { profile.Loading = false })
+		}
+	case "319":
+		// RPL_WHOISCHANNELS: <me> <nick> :[@]#channel ...
+		if len(msg.Params) >= 2 {
+			a.updateProfile(msg.Params[1], func(profile *UserProfile) {
+				for _, channel := range strings.Fields(msg.Trailing()) {
+					channel = strings.TrimPrefix(channel, "@")
+					if channel != "" && !containsFold(profile.Channels, channel) {
+						profile.Channels = append(profile.Channels, channel)
+					}
+				}
+			})
+		}
+	case "401":
+		// RPL_NOSUCHNICK: <me> <nick> :description
+		if len(msg.Params) >= 2 {
+			a.updateProfile(msg.Params[1], func(profile *UserProfile) {
+				profile.Loading = false
+				profile.Online = false
+				profile.Error = msg.Trailing()
+			})
 		}
 	case "321":
 		// LIST header.
@@ -1482,7 +1630,7 @@ func (a *App) handlePrivmsg(msg protocol.Message) {
 		dedupeKey = strings.ToLower(sender) + "\x00" + strings.ToLower(convID) + "\x00" + rawServerTime + "\x00" + msg.Params[1]
 	}
 	m := conversation.Message{
-		ID: a.nextID(), Target: convID, Sender: sender, Text: msg.Params[1], Time: ts,
+		ID: a.nextID(), Target: convID, Sender: sender, Text: protocol.DecodeMessageText(msg.Params[1]), Time: ts,
 		Historical: historical, DedupeKey: dedupeKey, Synthetic: synthetic,
 	}
 	if historical {
@@ -1500,7 +1648,7 @@ func (a *App) handleNotice(msg protocol.Message) {
 	if msg.Prefix != nil && msg.Prefix.Name != "" {
 		sender = msg.Prefix.Name
 	}
-	text := msg.Trailing()
+	text := protocol.DecodeMessageText(msg.Trailing())
 	if text == "" {
 		return
 	}
@@ -2207,11 +2355,19 @@ func (a *App) addStatus(sender, text string) {
 
 func (a *App) snapshot() ClientSnapshot {
 	s := a.sess.Snapshot()
+	a.mu.Lock()
+	profiles := make(map[string]UserProfile, len(a.profiles))
+	for key, profile := range a.profiles {
+		profile.Channels = append([]string(nil), profile.Channels...)
+		profiles[key] = profile
+	}
+	a.mu.Unlock()
 	return ClientSnapshot{
 		State: s.State, StateDetail: s.StateDetail, Nick: s.Nick, Server: s.Server,
 		Extended: s.Extended, Registered: s.Registered, Identified: s.Identified,
 		IdentityStatus: s.IdentityStatus, IdentityDetail: s.IdentityDetail,
 		CaptchaWord: s.CaptchaWord, CaptchaPrompt: s.CaptchaPrompt,
+		Profiles:      profiles,
 		Conversations: a.convs.Snapshot(),
 	}
 }
@@ -2361,6 +2517,15 @@ func displayTarget(v string) string {
 		return strings.TrimPrefix(v, "#")
 	}
 	return v
+}
+
+func containsFold(items []string, want string) bool {
+	for _, item := range items {
+		if strings.EqualFold(item, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func conversationKind(target string, private bool) conversation.Kind {

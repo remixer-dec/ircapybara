@@ -17,6 +17,8 @@ const (
 	MaxLineBytes    = MaxLineRunes*4 + 2
 )
 
+const messageLineSeparator = "\u2028"
+
 type Command struct {
 	Name string
 	Args string
@@ -92,6 +94,27 @@ var textRE = regexp.MustCompile(`^[\x20-\x7e\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]*$`)
 
 func ValidText(s string, maxRunes int) bool {
 	return utf8.ValidString(s) && len([]rune(s)) <= maxRunes && textRE.MatchString(s)
+}
+
+// EncodeMessageText keeps a multiline application message inside one IRC line.
+// U+2028 is valid UTF-8 text and cannot be mistaken for the CR/LF framing bytes.
+func EncodeMessageText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return strings.ReplaceAll(text, "\n", messageLineSeparator)
+}
+
+func DecodeMessageText(text string) string {
+	return strings.ReplaceAll(text, messageLineSeparator, "\n")
+}
+
+func ValidMessageText(s string, maxRunes int) bool {
+	decoded := DecodeMessageText(s)
+	if !utf8.ValidString(decoded) || utf8.RuneCountInString(decoded) > maxRunes {
+		return false
+	}
+	normalized := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(decoded)
+	return textRE.MatchString(normalized)
 }
 
 func Norm(s string) string { return strings.ToLower(s) }

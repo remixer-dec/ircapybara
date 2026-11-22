@@ -1,5 +1,5 @@
 # Capybara avatar assets
 
-`capybara-1.svg` and `capybara-2.svg` are the two avatar variants used by the optional hash-based per-user avatar mode.
+All SVGs in this directory are discovered by the Go/Wails bridge. User avatars choose a style by nickname hash and apply a deterministic nickname-seeded palette so every user gets a stable but varied avatar. The app brand mark is always `capybara-1.svg` with its original colors.
 
-They are deliberately isolated here so the fallback artwork can be replaced by the final project-provided SVGs without changing any application code. Keep the filenames unchanged.
+They are deliberately isolated here so new artwork can be added without changing application code.

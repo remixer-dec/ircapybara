@@ -23,6 +23,11 @@ var (
 	capArgsRE  = regexp.MustCompile(`^(?:LS(?: 302)?|END|LIST|REQ :[A-Za-z0-9=~._/-]{1,64}(?: [A-Za-z0-9=~._/-]{1,64})*)$`)
 )
 
+const (
+	guardedJoinLimit  = 2
+	guardedJoinWindow = time.Minute
+)
+
 func (s *Server) dispatch(c *model.Client, cmd protocol.Command) (bool, string) {
 	switch cmd.Name {
 	case "CAP":
@@ -410,6 +415,10 @@ func (s *Server) cmdJOIN(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	names := strings.Split(m[1], ",")
+	if s.protection != nil && s.protection.GuardLevel() >= 2 && !c.IsOper && !s.reserveGuardedJoins(c, len(names)) {
+		s.notice(c, "Guard mode limits each user to 2 channel joins per minute")
+		return false, ""
+	}
 	var keys []string
 	if m[2] != "" {
 		keys = strings.Split(m[2], ",")
@@ -422,6 +431,31 @@ func (s *Server) cmdJOIN(c *model.Client, args string) (bool, string) {
 		s.joinOne(c, name, key)
 	}
 	return false, ""
+}
+
+// reserveGuardedJoins meters JOIN targets, rather than just JOIN commands, so
+// a comma-separated JOIN cannot bypass the guarded-mode limit.
+func (s *Server) reserveGuardedJoins(c *model.Client, count int) bool {
+	if count <= 0 {
+		return true
+	}
+	now := time.Now()
+	cutoff := now.Add(-guardedJoinWindow)
+	kept := c.JoinTimes[:0]
+	for _, joinedAt := range c.JoinTimes {
+		if joinedAt.After(cutoff) {
+			kept = append(kept, joinedAt)
+		}
+	}
+	if len(kept)+count > guardedJoinLimit {
+		c.JoinTimes = kept
+		return false
+	}
+	for i := 0; i < count; i++ {
+		kept = append(kept, now)
+	}
+	c.JoinTimes = kept
+	return true
 }
 
 func (s *Server) joinOne(c *model.Client, name, key string) {
@@ -548,13 +582,13 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 		return false, ""
 	}
 	m := protocol.MessageArgsRE.FindStringSubmatch(args)
-	if m == nil || !protocol.ValidText(maybe(m, 2), protocol.MaxMessageRunes) {
+	if m == nil || !protocol.ValidMessageText(maybe(m, 2), protocol.MaxMessageRunes) {
 		if !notice {
 			s.badParams(c, "PRIVMSG")
 		}
 		return false, ""
 	}
-	event := pluginapi.MessageEvent{Client: s.clientView(c), Target: m[1], Text: m[2], Notice: notice}
+	event := pluginapi.MessageEvent{Client: s.clientView(c), Target: m[1], Text: protocol.DecodeMessageText(m[2]), Notice: notice}
 	for _, p := range s.plugins {
 		next, err := p.BeforeMessage(event)
 		if err != nil {
@@ -562,14 +596,14 @@ func (s *Server) cmdMessage(c *model.Client, args string, notice bool) (bool, st
 		}
 		event = next
 	}
-	if !(protocol.ChannelRE.MatchString(event.Target) || protocol.NickRE.MatchString(event.Target)) || !protocol.ValidText(event.Text, protocol.MaxMessageRunes) {
+	if !(protocol.ChannelRE.MatchString(event.Target) || protocol.NickRE.MatchString(event.Target)) || !protocol.ValidMessageText(event.Text, protocol.MaxMessageRunes) {
 		return false, ""
 	}
 	verb := "PRIVMSG"
 	if notice {
 		verb = "NOTICE"
 	}
-	line := fmt.Sprintf(":%s %s %s :%s", s.prefix(c), verb, event.Target, event.Text)
+	line := fmt.Sprintf(":%s %s %s :%s", s.prefix(c), verb, event.Target, protocol.EncodeMessageText(event.Text))
 
 	if strings.HasPrefix(event.Target, "#") {
 		norm := protocol.Norm(event.Target)
@@ -829,6 +863,17 @@ func (s *Server) cmdWHOIS(c *model.Client, args string) (bool, string) {
 		return false, ""
 	}
 	s.numeric(c, "311", fmt.Sprintf("%s %s %s * :%s", target.Nick, target.Username, target.RemoteIP.String(), target.Realname))
+	if !target.Connected.IsZero() && target.Connected.Unix() > 0 {
+		lastActivity := target.LastActivity
+		if lastActivity.IsZero() {
+			lastActivity = target.Connected
+		}
+		idle := int(time.Since(lastActivity).Seconds())
+		if idle < 0 {
+			idle = 0
+		}
+		s.numeric(c, "317", fmt.Sprintf("%s %d %d :seconds idle, signon time", target.Nick, idle, target.Connected.Unix()))
+	}
 	s.mu.RLock()
 	var channels []string
 	for _, ch := range s.channels {
@@ -1047,7 +1092,7 @@ func (s *Server) cmdHISTORY(c *model.Client, args string) (bool, string) {
 		if item.Notice {
 			verb = "NOTICE"
 		}
-		line := fmt.Sprintf(":%s!%s@%s %s %s :%s", item.Nick, item.Username, item.Host, verb, channelName, item.Text)
+		line := fmt.Sprintf(":%s!%s@%s %s %s :%s", item.Nick, item.Username, item.Host, verb, channelName, protocol.EncodeMessageText(item.Text))
 		s.sendLine(c, line)
 	}
 	return false, ""

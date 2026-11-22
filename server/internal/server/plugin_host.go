@@ -145,7 +145,7 @@ func (s *Server) clientsByIdentity(identity string) []*model.Client {
 }
 
 func (s *Server) SendNotice(clientID, text string) error {
-	if !protocol.ValidText(text, protocol.MaxMessageRunes) {
+	if !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return errors.New("invalid plugin notice")
 	}
 	c := s.clientByID(clientID)
@@ -157,7 +157,7 @@ func (s *Server) SendNotice(clientID, text string) error {
 }
 
 func (s *Server) SendNoticeToIdentity(identity, text string) error {
-	if !protocol.NickRE.MatchString(identity) || !protocol.ValidText(text, protocol.MaxMessageRunes) {
+	if !protocol.NickRE.MatchString(identity) || !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return errors.New("invalid plugin notice")
 	}
 	for _, c := range s.clientsByIdentity(identity) {
@@ -167,10 +167,10 @@ func (s *Server) SendNoticeToIdentity(identity, text string) error {
 }
 
 func (s *Server) pluginChannelLine(chName, from, text string) (string, error) {
-	if !protocol.ChannelRE.MatchString(chName) || !validPluginSender(from) || !protocol.ValidText(text, protocol.MaxMessageRunes) {
+	if !protocol.ChannelRE.MatchString(chName) || !validPluginSender(from) || !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return "", errors.New("invalid plugin message")
 	}
-	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, chName, text), nil
+	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, chName, protocol.EncodeMessageText(text)), nil
 }
 
 func (s *Server) SendChannelMessage(channel, from, text string) error {
@@ -232,10 +232,10 @@ func (s *Server) SendChannelMessageToIdentity(channel, identity, from, text stri
 }
 
 func (s *Server) directLine(targetNick, from, text string) (string, error) {
-	if !protocol.NickRE.MatchString(targetNick) || !validPluginSender(from) || !protocol.ValidText(text, protocol.MaxMessageRunes) {
+	if !protocol.NickRE.MatchString(targetNick) || !validPluginSender(from) || !protocol.ValidMessageText(text, protocol.MaxMessageRunes) {
 		return "", errors.New("invalid plugin direct message")
 	}
-	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, targetNick, text), nil
+	return fmt.Sprintf(":%s!plugin@%s PRIVMSG %s :%s", from, s.cfg.ServerName, targetNick, protocol.EncodeMessageText(text)), nil
 }
 
 func (s *Server) SendDirectMessageToClient(clientID, from, text string) error {
@@ -280,7 +280,7 @@ func (s *Server) DeliverSyntheticHistory(clientID, channel string, items []plugi
 		return errors.New("client does not support synthetic history")
 	}
 	for _, item := range items {
-		if !validPluginSender(item.From) || !protocol.ValidText(item.Text, protocol.MaxMessageRunes) {
+		if !validPluginSender(item.From) || !protocol.ValidMessageText(item.Text, protocol.MaxMessageRunes) {
 			return errors.New("invalid synthetic history item")
 		}
 		tags := "@ircapybara-history=1"
@@ -291,7 +291,7 @@ func (s *Server) DeliverSyntheticHistory(clientID, channel string, items []plugi
 			}
 			tags += ";time=" + t.UTC().Format(time.RFC3339Nano)
 		}
-		line := fmt.Sprintf("%s :%s!plugin@%s PRIVMSG %s :%s", tags, item.From, s.cfg.ServerName, channel, item.Text)
+		line := fmt.Sprintf("%s :%s!plugin@%s PRIVMSG %s :%s", tags, item.From, s.cfg.ServerName, channel, protocol.EncodeMessageText(item.Text))
 		s.sendLine(c, line)
 	}
 	return nil

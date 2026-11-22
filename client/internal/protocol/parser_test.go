@@ -38,3 +38,14 @@ func TestLargeUnicodeMessage(t *testing.T) {
 		t.Fatalf("wrong rune count")
 	}
 }
+
+func TestMultilineMessageEncoding(t *testing.T) {
+	text := "first line\nsecond line\r\nthird line"
+	wire := EncodeMessageText(text)
+	if strings.ContainsAny(wire, "\r\n") {
+		t.Fatal("encoded message must remain on one IRC line")
+	}
+	if got := DecodeMessageText(wire); got != "first line\nsecond line\nthird line" {
+		t.Fatalf("decoded message = %q", got)
+	}
+}

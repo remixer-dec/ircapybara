@@ -2,6 +2,8 @@ package protocol
 
 import "strings"
 
+const messageLineSeparator = "\u2028"
+
 type Prefix struct {
 	Raw  string `json:"raw"`
 	Name string `json:"name"`
@@ -34,6 +36,18 @@ func (m Message) IsNumeric() bool {
 		}
 	}
 	return true
+}
+
+// EncodeMessageText keeps a multiline application message inside one IRC line.
+// U+2028 is valid UTF-8 text and cannot be mistaken for the CR/LF framing bytes.
+func EncodeMessageText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return strings.ReplaceAll(text, "\n", messageLineSeparator)
+}
+
+func DecodeMessageText(text string) string {
+	return strings.ReplaceAll(text, messageLineSeparator, "\n")
 }
 
 func ParsePrefix(raw string) Prefix {

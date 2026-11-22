@@ -119,6 +119,10 @@ func TestStateEventsAreCoalescedAndDriveConnectionCallback(t *testing.T) {
 	adapter := newHostAdapter(host, t.TempDir())
 	t.Cleanup(adapter.stop)
 
+	// Establish an active session before the burst so coalescing can skip any
+	// of its intermediate snapshots and still deliver the disconnect callback.
+	adapter.deliverState(core.ClientSnapshot{State: session.Ready, Server: "home"})
+
 	const burst = 200
 	for i := 0; i < burst; i++ {
 		adapter.Emit(core.EventState, core.ClientSnapshot{State: session.Ready, Server: "home", StateDetail: strings.Repeat("x", i)})
@@ -149,8 +153,8 @@ func TestStateEventsAreCoalescedAndDriveConnectionCallback(t *testing.T) {
 
 	host.mu.Lock()
 	defer host.mu.Unlock()
-	if n := len(host.connections); n == 0 || host.connections[n-1] {
-		t.Fatalf("connection callbacks = %v, want the last one to report inactive", host.connections)
+	if len(host.connections) != 2 || !host.connections[0] || host.connections[1] {
+		t.Fatalf("connection callbacks = %v, want [true false]", host.connections)
 	}
 	sawTransfer := false
 	for _, event := range host.events {

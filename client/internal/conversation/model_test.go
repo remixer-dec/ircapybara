@@ -59,6 +59,35 @@ func TestHistoricalReplayIsDeduplicatedWithoutAffectingLiveMessages(t *testing.T
 	}
 }
 
+func TestHistoricalReplayIsMergedBeforeLiveMessagesAndDeduplicated(t *testing.T) {
+	s := NewStore(10)
+	s.AddMessage("#general", "general", PublicChannel, Message{
+		ID: "live", Target: "#general", Sender: "alice", Text: "new message", Time: time.Date(2026, 9, 12, 13, 0, 0, 0, time.UTC),
+	})
+	s.AddMessage("#general", "general", PublicChannel, Message{
+		ID: "live-duplicate", Target: "#general", Sender: "bob", Text: "already present", Time: time.Date(2026, 9, 12, 13, 1, 0, 0, time.UTC),
+	})
+
+	if !s.AddHistoricalMessage("#general", "general", PublicChannel, Message{
+		ID: "history", Target: "#general", Sender: "alice", Text: "old message", Time: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
+	}) {
+		t.Fatal("history message was unexpectedly rejected")
+	}
+	if s.AddHistoricalMessage("#general", "general", PublicChannel, Message{
+		ID: "history-duplicate", Target: "#general", Sender: "bob", Text: "already present",
+	}) {
+		t.Fatal("history duplicate was appended")
+	}
+
+	conv, ok := s.Get("#general")
+	if !ok || len(conv.Messages) != 3 {
+		t.Fatalf("expected merged history without a duplicate, got %#v", conv.Messages)
+	}
+	if conv.Messages[0].Text != "old message" || !conv.Messages[0].Historical || conv.Messages[1].ID != "live" || conv.Messages[2].ID != "live-duplicate" {
+		t.Fatalf("history was not merged before live messages: %#v", conv.Messages)
+	}
+}
+
 func TestCataloguedChannelCanBeJoinedAndRemoved(t *testing.T) {
 	s := NewStore(10)
 	s.EnsureCatalogued("#dev", "dev", PublicChannel, 12, "Development")
