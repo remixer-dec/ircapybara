@@ -49,7 +49,8 @@ The frontend reaches Go only through `frontend/dist/bridge.js` (`IRCapybaraNativ
 - `server-time` and `ircapybara-history=1` are understood; historical plugin messages do not increment frontend unread counters.
 - Dynamic `HELP` request UI with 704/705/706 and 524 handling.
 - `AIRESET` exposed as a friendly Reset AI Conversation action.
-- Attachment upload/download over `XFER`/`XATTACH`, using the server-provided upload chunk size, sequential download parts, declared-size enforcement, filename sanitisation, and SHA-256 verification.
+- Attachment upload/download over `XFER`/`XATTACH`, using the server-provided upload chunk size, sequential download parts, declared-size enforcement, filename sanitisation, and SHA-256 verification. Upload chunks are paced below the server's transfer flood limit (a burst of 400, then 200 chunks per second).
+- Recent channel history is requested automatically on join when the server tags replayed lines (`ircapybara/history` together with `draft/multiline`).
 - Downloads only start after an explicit user action and files are never automatically opened or executed.
 - Light, dark, and system theme modes.
 - No raw IRC command entry in the normal composer.
@@ -60,7 +61,7 @@ When the server offers both `batch` and `draft/multiline` with usable `max-bytes
 
 ### Markdown and code blocks
 
-The shared desktop and Android renderer supports paragraphs, headings (`#` through `######`), fenced code blocks, block quotes, flat ordered and unordered lists, emphasis, strong emphasis, backslash escapes, inline code, and links. A single newline within a paragraph is displayed as a line break. Unmatched or unsupported markup remains visible as text. This is a small Markdown subset, not a complete CommonMark implementation; the message Copy action copies the original text, including Markdown markers.
+The shared desktop and Android renderer supports paragraphs, headings (`#` through `######`), fenced code blocks, block quotes, flat ordered and unordered lists, emphasis, strong emphasis, backslash escapes, inline code, links, and GitHub-style tables (with `:---`, `:---:`, and `---:` column alignment; `\|` puts a pipe inside a cell). A single newline within a paragraph is displayed as a line break. Unmatched or unsupported markup remains visible as text. This is a small Markdown subset, not a complete CommonMark implementation; the message Copy action copies the original text, including Markdown markers.
 
 Only absolute HTTP and HTTPS destinations become explicit Markdown links. Prose URLs and recognized nicknames keep the usual link and mention behavior outside code and explicit links. Raw HTML is rendered as text and is never inserted as HTML.
 

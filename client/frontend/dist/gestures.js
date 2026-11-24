@@ -7,7 +7,9 @@
   // this file; sheet headers are touch-action none, so vertical drags on them
   // arrive here instead of scrolling.
   //
-  //   swipe right on the conversation pane   -> onSwipeBack()
+  //   swipe right on the conversation pane   -> onSwipeBack(); the pane follows
+  //                                            the finger, or the drawer that
+  //                                            options.drawer() returns slides in
   //   drag a sheet down by its header        -> onDismissSheet()
   //   press and hold a [data-longpress] node -> onLongPress(node)
   //
@@ -79,7 +81,10 @@
         return;
       }
       const pane = target.closest('.workspace');
-      if (pane && !target.closest('input, textarea') && options.canSwipeBack()) drag = { ...base, kind: 'pane', el: pane };
+      if (pane && !target.closest('input, textarea') && options.canSwipeBack()) {
+        const drawer = options.drawer && options.drawer();
+        drag = { ...base, kind: 'pane', el: drawer || pane, drawer: !!drawer };
+      }
     }
 
     function onMove(event) {
@@ -109,7 +114,8 @@
       drag.lastY = event.clientY;
       drag.lastT = event.timeStamp;
       drag.delta = Math.max(0, along);
-      drag.el.style.transform = drag.kind === 'pane' ? `translate3d(${drag.delta}px, 0, 0)` : `translate3d(0, ${drag.delta}px, 0)`;
+      if (drag.drawer) drag.el.style.transform = `translate3d(${Math.min(0, drag.delta - drag.el.offsetWidth)}px, 0, 0)`;
+      else drag.el.style.transform = drag.kind === 'pane' ? `translate3d(${drag.delta}px, 0, 0)` : `translate3d(0, ${drag.delta}px, 0)`;
     }
 
     function finish(event, cancelled) {

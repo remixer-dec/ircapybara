@@ -44,7 +44,7 @@ Spec status below is taken from ircv3.net as of November 2026. The site labels s
 
 ### Frontend (`client/frontend/dist/`)
 
-Plain text with linkified URLs, per-conversation unread counters kept in the page, a "load recent history" button, and (new) long-press message actions. Nothing renders replies, reactions, typing, edits/redactions, or away state yet.
+Markdown with linkified URLs, per-conversation unread counters kept in the page, recent history loaded automatically on join, and long-press message actions. Nothing renders replies, reactions, typing, edits/redactions, or away state yet.
 
 ## What to adopt
 
@@ -232,7 +232,7 @@ Client core:
 Frontend:
 
 1. Unread counts move out of page-local state and into the core, derived from the read marker. This also fixes a current limitation of the mobile shell, where unread counts and notification decisions are lost if the page is reloaded.
-2. Scroll-up pagination replaces the "load recent history" button. A "new messages" divider at the read marker.
+2. Scroll-up pagination extends the history loaded on join. A "new messages" divider at the read marker.
 
 ### Phase 5: rich messaging (M to L)
 

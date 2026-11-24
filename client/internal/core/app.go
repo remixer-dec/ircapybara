@@ -60,11 +60,14 @@ type TransferUpdate struct {
 }
 
 type ClientSnapshot struct {
-	State          session.State               `json:"state"`
-	StateDetail    string                      `json:"stateDetail,omitempty"`
-	Nick           string                      `json:"nick,omitempty"`
-	Server         string                      `json:"server,omitempty"`
-	Extended       bool                        `json:"extended"`
+	State       session.State `json:"state"`
+	StateDetail string        `json:"stateDetail,omitempty"`
+	Nick        string        `json:"nick,omitempty"`
+	Server      string        `json:"server,omitempty"`
+	Extended    bool          `json:"extended"`
+	// Markdown is true on an IRCapybara server with multiline messages, where
+	// formatted text, code blocks and tables survive the trip intact.
+	Markdown       bool                        `json:"markdown"`
 	Registered     bool                        `json:"registered"`
 	Identified     bool                        `json:"identified"`
 	IdentityStatus string                      `json:"identityStatus,omitempty"`
@@ -173,6 +176,8 @@ type App struct {
 	transferWarnings map[string]bool
 	published        map[string]string
 
+	uploadPace chunkPacer
+
 	msgSeq      atomic.Uint64
 	traceSeq    atomic.Uint64
 	lastInbound atomic.Int64
@@ -194,7 +199,7 @@ func New(opts Options) *App {
 		platform = PlatformDesktop
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{
+	a := &App{
 		ctx:              ctx,
 		cancel:           cancel,
 		host:             host,
@@ -213,6 +218,26 @@ func New(opts Options) *App {
 		transferPercents: map[string]int{},
 		transferWarnings: map[string]bool{},
 		published:        map[string]string{},
+	}
+	a.restorePinnedDMs()
+	return a
+}
+
+// restorePinnedDMs puts saved pinned direct messages back in the sidebar; the
+// conversation store itself only lives as long as the process.
+func (a *App) restorePinnedDMs() {
+	if a.prefs == nil {
+		return
+	}
+	settings, err := a.prefs.Load()
+	if err != nil {
+		return
+	}
+	for _, target := range settings.PinnedDMs {
+		if validIRCAtom(target) && !strings.HasPrefix(target, "#") {
+			a.convs.Ensure(target, target, conversation.DM)
+			a.convs.SetPinned(target, true)
+		}
 	}
 }
 
@@ -450,24 +475,35 @@ func (a *App) Connect(cfg ConnectionConfig) error {
 	// leaving the UI at "Negotiating" forever.
 	go a.capNegotiationFallback(c, gen)
 
-	if a.prefs != nil {
-		theme := "light"
-		if current, err := a.prefs.Load(); err == nil && (current.Theme == "light" || current.Theme == "dark") {
-			theme = current.Theme
+	a.updatePrefs(func(settings *persist.Settings) {
+		if settings.Theme != "light" && settings.Theme != "dark" {
+			settings.Theme = "light"
 		}
-		tlsMode := persist.TLSModeSystem
+		settings.TLSMode = persist.TLSModeSystem
 		if cfg.PinServerCertificate {
-			tlsMode = persist.TLSModePinned
+			settings.TLSMode = persist.TLSModePinned
 		} else if cfg.AllowSelfSigned {
-			tlsMode = persist.TLSModeAllowSelfSigned
+			settings.TLSMode = persist.TLSModeAllowSelfSigned
 		}
-		_ = a.prefs.Save(persist.Settings{
-			Host: cfg.Host, Port: cfg.Port, Nick: cfg.Nick, DisplayName: cfg.DisplayName,
-			ServerLabel: cfg.ServerLabel, AutoJoin: cfg.AutoJoin, Theme: theme, TLSMode: tlsMode,
-			PinnedCertificatePath: cfg.PinnedCertificatePath,
-		})
-	}
+		settings.Host, settings.Port, settings.Nick, settings.DisplayName = cfg.Host, cfg.Port, cfg.Nick, cfg.DisplayName
+		settings.ServerLabel, settings.AutoJoin = cfg.ServerLabel, cfg.AutoJoin
+		settings.PinnedCertificatePath = cfg.PinnedCertificatePath
+	})
 	return nil
+}
+
+// updatePrefs applies one change to the saved settings, keeping every field
+// the change does not touch.
+func (a *App) updatePrefs(change func(*persist.Settings)) {
+	if a.prefs == nil {
+		return
+	}
+	settings, err := a.prefs.Load()
+	if err != nil {
+		return
+	}
+	change(&settings)
+	_ = a.prefs.Save(settings)
 }
 
 func (a *App) Disconnect() error {
@@ -569,6 +605,33 @@ func (a *App) OpenDirectMessage(target string) error {
 	return nil
 }
 
+// SetConversationPinned keeps a direct message in the sidebar, across restarts,
+// until it is unpinned.
+func (a *App) SetConversationPinned(target string, pinned bool) error {
+	target = strings.TrimSpace(target)
+	if !validIRCAtom(target) || strings.HasPrefix(target, "#") {
+		return errors.New("only direct messages can be pinned")
+	}
+	if pinned {
+		a.convs.Ensure(target, target, conversation.DM)
+	}
+	a.convs.SetPinned(target, pinned)
+	a.updatePrefs(func(settings *persist.Settings) {
+		next := []string{}
+		for _, item := range settings.PinnedDMs {
+			if !strings.EqualFold(item, target) {
+				next = append(next, item)
+			}
+		}
+		if pinned {
+			next = append(next, target)
+		}
+		settings.PinnedDMs = next
+	})
+	a.emitState()
+	return nil
+}
+
 func (a *App) CloseConversation(target string) error {
 	target = strings.TrimSpace(target)
 	if target == "" || strings.EqualFold(target, "status") || !validIRCAtom(target) {
@@ -583,6 +646,9 @@ func (a *App) CloseConversation(target string) error {
 			return err
 		}
 		a.forgetJoinedChannel(target)
+	}
+	if conv.Pinned {
+		_ = a.SetConversationPinned(target, false)
 	}
 	a.convs.Remove(target)
 	a.emitState()
@@ -721,7 +787,7 @@ func (a *App) RequestHistory(target string, limit int) error {
 	if a.historyPending == nil {
 		a.historyPending = map[string]historyRequest{}
 	}
-	if !(a.capEnabled["ircapybara/history"] && a.capOffered["draft/multiline"]) {
+	if !a.taggedHistoryLocked() {
 		a.historyPending[strings.ToLower(target)] = historyRequest{Until: time.Now().Add(1500 * time.Millisecond), Remaining: count}
 	}
 	a.mu.Unlock()
@@ -736,6 +802,18 @@ func (a *App) RequestHistory(target string, limit int) error {
 		return err
 	}
 	return nil
+}
+
+// taggedHistory reports whether the server marks every replayed history line
+// with the ircapybara-history tag; servers that also offer multiline do.
+func (a *App) taggedHistory() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.taggedHistoryLocked()
+}
+
+func (a *App) taggedHistoryLocked() bool {
+	return a.capEnabled["ircapybara/history"] && a.capOffered["draft/multiline"]
 }
 
 func (a *App) RequestHelp(topic string) error {
@@ -756,31 +834,33 @@ func (a *App) ResetAI() error {
 	return a.send("AIRESET")
 }
 
-func (a *App) PickAndUpload(target string) error {
+// PickAndUpload lets the user choose a file and starts sending it to target. It
+// returns the name the file is sent under, or "" when the user cancelled.
+func (a *App) PickAndUpload(target string) (string, error) {
 	snap := a.sess.Snapshot()
 	if snap.State != session.Ready {
-		return errors.New("this session is currently read-only")
+		return "", errors.New("this session is currently read-only")
 	}
 	if !snap.Extended {
-		return errors.New("attachments require IRCapybara extended mode")
+		return "", errors.New("attachments require IRCapybara extended mode")
 	}
 	if !validIRCAtom(target) {
-		return errors.New("invalid upload target")
+		return "", errors.New("invalid upload target")
 	}
 	picked, ok, err := a.host.ChooseUpload()
 	if err != nil || !ok || picked.Path == "" {
-		return err
+		return "", err
 	}
 	path := picked.Path
 	st, err := os.Stat(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !st.Mode().IsRegular() {
-		return errors.New("only regular files can be uploaded")
+		return "", errors.New("only regular files can be uploaded")
 	}
 	if st.Size() > xfer.DefaultMaxFileSize {
-		return fmt.Errorf("file exceeds 15 MiB limit")
+		return "", fmt.Errorf("file exceeds 15 MiB limit")
 	}
 	name := strings.TrimSpace(picked.Name)
 	if name == "" {
@@ -799,13 +879,13 @@ func (a *App) PickAndUpload(target string) error {
 	}
 	u := xfer.PendingUpload{Target: target, Path: path, Name: name, MIME: mt, Size: st.Size()}
 	if err := a.transfers.QueueUpload(u); err != nil {
-		return err
+		return "", err
 	}
 	if err := a.send(fmt.Sprintf("XFER START %s %d %s :%s", target, st.Size(), mt, name)); err != nil {
 		a.transfers.CancelUpload(path)
-		return err
+		return "", err
 	}
-	return nil
+	return name, nil
 }
 
 func (a *App) DownloadAttachment(fileID string) error {
@@ -1152,6 +1232,13 @@ func (a *App) handleLine(line string) {
 					a.convs.SetJoined(target, true)
 					a.rememberJoinedChannel(target)
 					_ = a.send("NAMES " + target)
+					// Recent history loads with every joined channel when the
+					// server tags its replay; replayed lines already on screen
+					// are deduplicated. Untagged replay can only be told apart
+					// by timing, which would mislabel live messages after a join.
+					if a.taggedHistory() {
+						_ = a.RequestHistory(target, 0)
+					}
 					if strings.EqualFold(target, "#general") {
 						a.flushPendingAutoJoin()
 					}
@@ -1699,12 +1786,45 @@ func (a *App) handleNotice(msg protocol.Message) {
 		"IRCapybara extension available: XMODE EXTENDED (rendering format reserved)":
 		// Older servers send these hints for each channel the client joins.
 		return
+	case "Extended mode enabled for attachments":
+		if !a.firstExtendedNotice() {
+			return
+		}
+	}
+	// History is requested automatically for every joined channel, so a channel
+	// without history is not news.
+	if strings.HasPrefix(text, "History is disabled for ") {
+		return
 	}
 	a.applyServerPolicyFromText(text)
 	if a.handleTransferNotice(text) {
 		return
 	}
 	a.addStatus(sender, text)
+}
+
+// firstExtendedNotice reports whether the extended-mode notice has not been
+// shown for the current server yet, and records that it now has.
+func (a *App) firstExtendedNotice() bool {
+	a.mu.Lock()
+	server := strings.ToLower(fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port))
+	a.mu.Unlock()
+	if a.prefs == nil {
+		return true
+	}
+	settings, err := a.prefs.Load()
+	if err != nil {
+		return true
+	}
+	for _, seen := range settings.ExtendedNoticeServers {
+		if seen == server {
+			return false
+		}
+	}
+	a.updatePrefs(func(settings *persist.Settings) {
+		settings.ExtendedNoticeServers = append(settings.ExtendedNoticeServers, server)
+	})
+	return true
 }
 
 func (a *App) handleTransferNotice(text string) bool {
@@ -1930,9 +2050,7 @@ func (a *App) handleXfer(msg protocol.Message) {
 			return
 		}
 		go func() {
-			sha, _, err := a.transfers.StreamUpload(fileID, parts, func(part int, b64 string) error {
-				return a.send(fmt.Sprintf("XFER CHUNK %s %d %s", fileID, part, b64))
-			})
+			sha, _, err := a.transfers.StreamUpload(fileID, parts, a.sendUploadChunk(fileID))
 			if err != nil {
 				a.addStatus("Transfer", "Upload retransmission failed: "+err.Error())
 				return
@@ -1954,9 +2072,7 @@ func (a *App) handleXfer(msg protocol.Message) {
 }
 
 func (a *App) streamUpload(fileID string, upload xfer.PendingUpload) {
-	sha, size, err := a.transfers.StreamUpload(fileID, nil, func(part int, b64 string) error {
-		return a.send(fmt.Sprintf("XFER CHUNK %s %d %s", fileID, part, b64))
-	})
+	sha, size, err := a.transfers.StreamUpload(fileID, nil, a.sendUploadChunk(fileID))
 	if err != nil {
 		a.addStatus("Transfer", "Upload failed: "+err.Error())
 		return
@@ -2084,16 +2200,7 @@ func (a *App) rememberJoinedChannel(target string) {
 	a.cfg.AutoJoin = autoJoinTargets(append(a.cfg.AutoJoin, target))
 	targets := append([]string(nil), a.cfg.AutoJoin...)
 	a.mu.Unlock()
-
-	if a.prefs == nil {
-		return
-	}
-	settings, err := a.prefs.Load()
-	if err != nil {
-		return
-	}
-	settings.AutoJoin = targets
-	_ = a.prefs.Save(settings)
+	a.updatePrefs(func(settings *persist.Settings) { settings.AutoJoin = targets })
 }
 
 func (a *App) forgetJoinedChannel(target string) {
@@ -2110,15 +2217,7 @@ func (a *App) forgetJoinedChannel(target string) {
 	a.cfg.AutoJoin = autoJoinTargets(next)
 	targets := append([]string(nil), a.cfg.AutoJoin...)
 	a.mu.Unlock()
-	if a.prefs == nil {
-		return
-	}
-	settings, err := a.prefs.Load()
-	if err != nil {
-		return
-	}
-	settings.AutoJoin = targets
-	_ = a.prefs.Save(settings)
+	a.updatePrefs(func(settings *persist.Settings) { settings.AutoJoin = targets })
 }
 
 func (a *App) resetTransferStates() {
@@ -2409,10 +2508,11 @@ func (a *App) snapshot() ClientSnapshot {
 		profile.Channels = append([]string(nil), profile.Channels...)
 		profiles[key] = profile
 	}
+	markdown := a.client != nil && a.coreAdvertised && a.capEnabled["batch"] && a.capEnabled["draft/multiline"]
 	a.mu.Unlock()
 	return ClientSnapshot{
 		State: s.State, StateDetail: s.StateDetail, Nick: s.Nick, Server: s.Server,
-		Extended: s.Extended, Registered: s.Registered, Identified: s.Identified,
+		Extended: s.Extended, Markdown: markdown, Registered: s.Registered, Identified: s.Identified,
 		IdentityStatus: s.IdentityStatus, IdentityDetail: s.IdentityDetail,
 		CaptchaWord: s.CaptchaWord, CaptchaPrompt: s.CaptchaPrompt,
 		Profiles:      profiles,

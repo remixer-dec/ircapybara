@@ -24,7 +24,6 @@
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.7-4.1 3-6.2 7-6.2s6.3 2.1 7 6.2"/></symbol>
     <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-3.7 2.4-5.5 5.5-5.5s5 1.8 5.5 5.5"/><path d="M15.2 5.5a3 3 0 0 1 0 5.1M16.5 13.7c2.3.5 3.6 2.2 4 5.3"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="m8 3 2 4m4-4-2 4M7 8h10v2a5 5 0 0 1-5 5v5M9 20h6"/></symbol>
-    <symbol id="i-history" viewBox="0 0 24 24"><path d="M4.5 8V4.5H8"/><path d="M5 5a8 8 0 1 1-1 9"/><path d="M12 7.5V12l3 1.8"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h8m-2 0v3m-3-3v2"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8.2 12.5 5.7-5.7a3.2 3.2 0 1 1 4.5 4.5l-7.2 7.2a5 5 0 0 1-7.1-7.1l7-7"/></symbol>
@@ -43,6 +42,7 @@
     <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.1M8 17h.1"/></symbol>
     <symbol id="i-crown" viewBox="0 0 24 24"><path d="m4 7 4 4 4-6 4 6 4-4-2 10H6z"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10m-4-4 4 4 4-4M5 19h14"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9.5 3.5h5l-.8 6 3.3 3.3v1.4H7v-1.4l3.3-3.3z"/><path d="M12 14.2v6.3"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 8.5h17"/></symbol>
   </svg>
 
@@ -103,7 +103,8 @@
               <span class="nav-text">{{ conv.name }}</span>
               <span v-if="unread[conv.id]" class="unread">{{ compactCount(unread[conv.id]) }}</span>
             </button>
-            <button class="nav-close" type="button" :title="`Close ${conv.name}`" :aria-label="`Close ${conv.name}`" @click.stop="closeConversation(conv)"><svg class="icon"><use href="#i-x"></use></svg></button>
+            <button v-if="conv.pinned" class="nav-close pinned" type="button" :title="`Unpin ${conv.name}`" :aria-label="`Unpin ${conv.name}`" @click.stop="setPinned(conv, false)"><svg class="icon"><use href="#i-pin"></use></svg></button>
+            <button v-else class="nav-close" type="button" :title="`Close ${conv.name}`" :aria-label="`Close ${conv.name}`" @click.stop="closeConversation(conv)"><svg class="icon"><use href="#i-x"></use></svg></button>
           </div>
         </div>
 
@@ -125,6 +126,8 @@
       </div>
     </aside>
 
+    <div class="drawer-scrim" aria-hidden="true" @click="mobilePane = 'chat'"></div>
+
     <main class="workspace">
       <header class="topbar">
         <button class="icon-button back-button" type="button" title="Back to chats" aria-label="Back to chats" @click="showList"><svg class="icon"><use href="#i-chevron-left"></use></svg></button>
@@ -137,7 +140,6 @@
           <svg class="icon"><use href="#i-users"></use></svg><span>{{ selectedConversation.onlineCount || 0 }} / {{ selectedConversation.memberCount || selectedConversation.onlineCount || 0 }}</span>
         </button>
         <div class="topbar-actions">
-          <button v-if="viewMode === 'conversation' && selectedConversation && selectedConversation.kind !== 'status'" class="icon-button" type="button" :disabled="!canRequestHistory" title="Load recent history" aria-label="Load recent history" @click="requestHistory"><svg class="icon"><use href="#i-history"></use></svg></button>
           <button class="icon-button protocol-button" type="button" title="Protocol log" aria-label="Protocol log" @click="openProtocolLog"><svg class="icon"><use href="#i-terminal"></use></svg></button>
           <button class="icon-button" type="button" :disabled="!canIdentify" :title="snapshot.identityStatus === 'failed' ? snapshot.identityDetail : 'Identify a registered nickname'" aria-label="Identify a registered nickname" @click="openModal('identify')"><svg class="icon"><use href="#i-key"></use></svg></button>
           <button v-if="viewMode === 'conversation' && selectedConversation" class="icon-button" type="button" title="Conversation details" aria-label="Conversation details" @click="openModal('details')"><svg class="icon"><use href="#i-more"></use></svg></button>
@@ -223,18 +225,36 @@
         <form class="modal-card" @submit.prevent="connect">
           <div class="modal-header"><div><span class="eyebrow">Connection</span><h2 id="connect-title">Connect to IRCapybara</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
           <div class="field-grid two"><label><span>Server address</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.host" autocomplete="off" inputmode="url" enterkeyhint="next" placeholder="ircapybara.local" required /></label><label><span>Port</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.number="connection.port" type="number" inputmode="numeric" min="1" max="65535" required /></label></div>
-          <label><span>Server display name <em>optional; only changes how the server is labeled in the app</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.serverLabel" autocomplete="off" placeholder="Home server" /></label>
-          <div class="field-grid two balanced"><label><span>Nickname</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.nick" autocomplete="username" placeholder="alice" required /></label><label><span>Display name</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.displayName" autocomplete="off" placeholder="Alice" /></label></div>
-          <div class="field-grid two balanced"><label><span>Server password <em>PASS · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.serverPassword" type="password" autocomplete="off" /></label><label><span>Identity password <em>IDENTIFY · optional; not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.identityPassword" type="password" autocomplete="off" /></label></div>
-          <label><span>Identity nickname <em>optional; only for IDENTIFY &lt;nick&gt; &lt;password&gt;</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.identityNick" autocomplete="off" :placeholder="connection.nick || 'alice'" /></label>
-          <label><span>Auto-join channels <em>#general is first; channels you successfully join are remembered</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.autoJoinText" autocomplete="off" placeholder="#general, #ai, #rss-news" /></label>
-          <div class="tls-options">
-            <div class="tls-heading"><strong>TLS</strong><span>IRC transport is always encrypted.</span></div>
-            <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.allowSelfSigned" type="checkbox" :disabled="connection.pinServerCertificate" /><span><strong>Allow self-signed or otherwise untrusted certificates</strong><small>Enabled by default for local servers. Traffic is encrypted, but certificate identity is not verified.</small></span></label>
-            <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinServerCertificate" type="checkbox" @change="connection.allowSelfSigned = connection.pinServerCertificate ? false : connection.allowSelfSigned" /><span><strong>Trust only a specific certificate or public key</strong><small>Use this to keep local/private certificates while still pinning the server cryptographically.</small></span></label>
-            <div v-if="connection.pinServerCertificate" class="certificate-picker"><label><span>Certificate or public-key file</span><div class="file-field"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinnedCertificatePath" autocomplete="off" readonly placeholder="Choose a .pem, .crt, .cer, .der or .pub file" /><button class="secondary-button" type="button" @click="pickTLSCertificate">Choose</button></div></label></div>
-          </div>
-          <p class="security-note">PASS and IDENTIFY are separate credentials. Neither is saved. IDENTIFY is sent exactly as <code>IDENTIFY password</code> or <code>IDENTIFY nick password</code>.</p>
+          <label><span>Nickname</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.nick" autocomplete="username" placeholder="alice" required /></label>
+          <details class="form-section">
+            <summary><span>Profile <em>display name and server label</em></span><svg class="icon"><use href="#i-chevron-down"></use></svg></summary>
+            <div class="form-section-body">
+              <label><span>Display name</span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.displayName" autocomplete="off" placeholder="Alice" /></label>
+              <label><span>Server display name <em>only changes how the server is labeled in the app</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.serverLabel" autocomplete="off" placeholder="Home server" /></label>
+            </div>
+          </details>
+          <details class="form-section">
+            <summary><span>Passwords <em>server password and nickname identity</em></span><svg class="icon"><use href="#i-chevron-down"></use></svg></summary>
+            <div class="form-section-body">
+              <div class="field-grid two balanced"><label><span>Server password <em>PASS · not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.serverPassword" type="password" autocomplete="off" /></label><label><span>Identity password <em>IDENTIFY · not saved</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.identityPassword" type="password" autocomplete="off" /></label></div>
+              <label><span>Identity nickname <em>only for IDENTIFY &lt;nick&gt; &lt;password&gt;</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model.trim="connection.identityNick" autocomplete="off" :placeholder="connection.nick || 'alice'" /></label>
+              <p class="security-note">PASS and IDENTIFY are separate credentials. Neither is saved. IDENTIFY is sent exactly as <code>IDENTIFY password</code> or <code>IDENTIFY nick password</code>.</p>
+            </div>
+          </details>
+          <details class="form-section">
+            <summary><span>Channels <em>joined after connecting</em></span><svg class="icon"><use href="#i-chevron-down"></use></svg></summary>
+            <div class="form-section-body">
+              <label><span>Auto-join channels <em>#general is first; channels you successfully join are remembered</em></span><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.autoJoinText" autocomplete="off" placeholder="#general, #ai, #rss-news" /></label>
+            </div>
+          </details>
+          <details class="form-section">
+            <summary><span>TLS <em>always encrypted; certificate checks</em></span><svg class="icon"><use href="#i-chevron-down"></use></svg></summary>
+            <div class="form-section-body">
+              <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.allowSelfSigned" type="checkbox" :disabled="connection.pinServerCertificate" /><span><strong>Allow self-signed or otherwise untrusted certificates</strong><small>Enabled by default for local servers. Traffic is encrypted, but certificate identity is not verified.</small></span></label>
+              <label class="check-row"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinServerCertificate" type="checkbox" @change="connection.allowSelfSigned = connection.pinServerCertificate ? false : connection.allowSelfSigned" /><span><strong>Trust only a specific certificate or public key</strong><small>Use this to keep local/private certificates while still pinning the server cryptographically.</small></span></label>
+              <div v-if="connection.pinServerCertificate" class="certificate-picker"><label><span>Certificate or public-key file</span><div class="file-field"><input autocorrect="off" autocapitalize="none" spellcheck="false" v-model="connection.pinnedCertificatePath" autocomplete="off" readonly placeholder="Choose a .pem, .crt, .cer, .der or .pub file" /><button class="secondary-button" type="button" @click="pickTLSCertificate">Choose</button></div></label></div>
+            </div>
+          </details>
           <div class="modal-actions"><button type="button" class="secondary-button" @click="closeModal">Cancel</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? 'Connecting…' : 'Connect' }}</button></div>
           <p class="form-error">{{ formError }}</p>
         </form>
@@ -360,7 +380,7 @@
         <div class="modal-card compact members-card">
           <div class="modal-header"><div><span class="eyebrow">Channel members</span><h2 id="members-title">{{ selectedConversation.name }}</h2><p class="member-count-line">{{ selectedConversation.onlineCount || 0 }} online / {{ selectedConversation.memberCount || selectedConversation.onlineCount || 0 }} total</p></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
           <div class="member-list">
-            <div v-for="member in selectedConversation.members || []" :key="member.nick" class="member-row"><span class="presence-avatar"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(member.nick)" alt="" draggable="false" /><span v-else>{{ avatarLetters(member.nick) }}</span></span><div><strong>{{ member.nick }}</strong><span><i class="status-dot online"></i>Online</span></div><svg v-if="member.operator" class="icon member-role" title="Channel operator"><use href="#i-crown"></use></svg></div>
+            <button v-for="member in selectedConversation.members || []" :key="member.nick" class="member-row" type="button" :title="`View ${member.nick}'s profile`" @click="openProfile(member.nick)"><span class="presence-avatar"><img v-if="appearancePrefs.capybaraAvatars" :src="capybaraAvatar(member.nick)" alt="" draggable="false" /><span v-else>{{ avatarLetters(member.nick) }}</span></span><div><strong>{{ member.nick }}</strong><span><i class="status-dot online"></i>Online</span></div><svg v-if="member.operator" class="icon member-role" title="Channel operator"><use href="#i-crown"></use></svg></button>
             <div v-if="!(selectedConversation.members || []).length" class="member-empty">{{ memberLoading ? 'Refreshing member list…' : 'No online members were reported yet.' }}</div>
           </div>
           <p v-if="selectedConversation.memberCount > selectedConversation.onlineCount" class="field-note">IRC NAMES exposes currently present users. The server catalogue reports a larger total for this channel.</p>
@@ -388,8 +408,8 @@
       <div v-if="modal === 'details' && selectedConversation" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="details-title" @click.self="closeModal">
         <div class="modal-card compact">
           <div class="modal-header"><div><span class="eyebrow">Conversation</span><h2 id="details-title">{{ selectedConversation.name }}</h2></div><button type="button" class="icon-button" aria-label="Close" @click="closeModal"><svg class="icon"><use href="#i-x"></use></svg></button></div>
-          <dl class="detail-list"><div><dt>Type</dt><dd>{{ kindLabel(selectedConversation.kind) }}</dd></div><div><dt>Target</dt><dd><code>{{ selectedConversation.id }}</code></dd></div><div v-if="selectedConversation.memberCount"><dt>Presence</dt><dd>{{ selectedConversation.onlineCount || 0 }} online / {{ selectedConversation.memberCount }} total</dd></div><div v-if="selectedConversation.kind !== 'status'"><dt>State</dt><dd>{{ selectedConversation.joined ? 'Joined' : (selectedConversation.catalogued ? 'Available, not joined' : 'Open') }}</dd></div><div><dt>Rendering</dt><dd>Plain text with safe clickable HTTP(S) links</dd></div><div v-if="snapshot.extended"><dt>Attachments</dt><dd>IRCapybara transfer support available</dd></div></dl>
-          <div class="modal-actions"><button v-if="selectedConversation.kind !== 'status'" class="secondary-button destructive" type="button" @click="closeConversation(selectedConversation); closeModal()">{{ selectedConversation.joined && selectedConversation.id.startsWith('#') ? 'Leave and remove' : 'Remove from sidebar' }}</button><button class="primary-button" type="button" @click="closeModal">Done</button></div>
+          <dl class="detail-list"><div><dt>Type</dt><dd>{{ kindLabel(selectedConversation.kind) }}</dd></div><div><dt>Target</dt><dd><code>{{ selectedConversation.id }}</code></dd></div><div v-if="selectedConversation.memberCount"><dt>Presence</dt><dd>{{ selectedConversation.onlineCount || 0 }} online / {{ selectedConversation.memberCount }} total</dd></div><div v-if="selectedConversation.kind !== 'status'"><dt>State</dt><dd>{{ selectedConversation.joined ? 'Joined' : (selectedConversation.catalogued ? 'Available, not joined' : 'Open') }}</dd></div><div><dt>Rendering</dt><dd>Markdown with code blocks, tables, and safe links</dd></div><div v-if="snapshot.extended"><dt>Attachments</dt><dd>IRCapybara transfer support available</dd></div></dl>
+          <div class="modal-actions"><button v-if="isDirect(selectedConversation)" class="secondary-button" type="button" @click="setPinned(selectedConversation, !selectedConversation.pinned)"><svg class="icon button-icon"><use href="#i-pin"></use></svg>{{ selectedConversation.pinned ? 'Unpin' : 'Pin to sidebar' }}</button><button v-if="selectedConversation.kind !== 'status'" class="secondary-button destructive" type="button" @click="closeConversation(selectedConversation); closeModal()">{{ selectedConversation.joined && selectedConversation.id.startsWith('#') ? 'Leave and remove' : 'Remove from sidebar' }}</button><button class="primary-button" type="button" @click="closeModal">Done</button></div>
         </div>
       </div>
     </transition>

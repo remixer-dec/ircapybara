@@ -241,10 +241,18 @@ textarea::placeholder, input::placeholder { color: var(--muted-2); }
 .modal-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent); }
 .field-grid.two { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 12px; }
 .field-grid.two.balanced { grid-template-columns: 1fr 1fr; }
-.tls-options { margin: 2px 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
-.tls-heading { margin-bottom: 9px; display: flex; align-items: baseline; gap: 8px; }
-.tls-heading strong { font-size: 12px; }
-.tls-heading span { color: var(--muted); font-size: 10.5px; }
+/* Optional connection settings start collapsed. */
+.form-section { margin: 0 0 10px; border: 1px solid var(--line); border-radius: 12px; }
+.form-section > summary {
+  min-height: 42px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  list-style: none; cursor: pointer; font-size: 12px; font-weight: 700; user-select: none; -webkit-user-select: none;
+}
+.form-section > summary::-webkit-details-marker { display: none; }
+.form-section > summary em { margin-left: 6px; color: var(--muted); font-style: normal; font-weight: 400; }
+.form-section > summary .icon { width: 16px; height: 16px; color: var(--muted); transition: transform .16s ease; }
+.form-section[open] > summary .icon { transform: rotate(180deg); }
+.form-section-body { padding: 2px 12px 10px; }
+.form-section-body .security-note { margin-bottom: 0; }
 .modal-card label.check-row { margin: 0; padding: 8px 4px; display: grid; grid-template-columns: 18px minmax(0,1fr); align-items: start; gap: 9px; cursor: pointer; font-weight: 400; }
 .modal-card label.check-row + label.check-row { border-top: 1px solid var(--line); }
 .modal-card label.check-row input { width: 15px; height: 15px; margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
@@ -416,6 +424,7 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
 .nav-item .nav-row { min-width: 0; padding-right: 8px; }
 .nav-close { position: static; transform: none; width: 24px; height: 24px; margin: 0; justify-self: center; border: 0; border-radius: 7px; display: grid; place-items: center; background: transparent; color: var(--muted-2); cursor: pointer; opacity: 0; transition: opacity .12s ease, background-color .12s ease, color .12s ease; }
 .nav-close .icon { width: 14px; height: 14px; }
+.nav-item .nav-close.pinned, .nav-item.active .nav-close.pinned { opacity: 1; color: var(--accent-strong); }
 .nav-item:hover .nav-close, .nav-item.active .nav-close, .nav-close:focus-visible { opacity: 1; }
 .nav-close:hover { background: var(--surface-3); color: var(--text); }
 .catalog-dot { margin-left: auto; }
@@ -506,6 +515,8 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
 .member-list { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
 .member-row { min-height: 52px; padding: 7px 10px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; align-items: center; }
 .member-row + .member-row { border-top: 1px solid var(--line); }
+button.member-row { width: 100%; border-width: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+button.member-row:hover, button.member-row:active { background: var(--surface-3); }
 .member-row .presence-avatar { width: 32px; height: 32px; }
 .member-row > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .member-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
@@ -658,7 +669,7 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
 .attachment-restart:active { transform: translateY(1px); }
 
 /* Shared shell chrome that only the phone layout shows. */
-.back-button, .sidebar-connect { display: none; }
+.back-button, .sidebar-connect, .drawer-scrim { display: none; }
 
 /* Phone layout: the sidebar and the conversation are two full-screen panes.
    html[data-pane] says which one is showing; app.js flips it on navigation and
@@ -686,6 +697,25 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
   html[data-pane="chat"] .sidebar { visibility: hidden; transition: visibility 0s linear .24s; }
   html[data-drag="pane"] .sidebar { visibility: visible; transition: none; }
   html[data-drag="pane"] .workspace, html[data-drag="sheet"] .modal-card { transition: none; }
+
+  /* Drawer mode (html[data-drawer], once a conversation has been opened): the
+     conversation stays in place and the list slides in over half of it. */
+  html[data-drawer] .workspace { transform: none; visibility: visible; transition: none; box-shadow: none; }
+  html[data-drawer] .sidebar {
+    z-index: 4; justify-self: start; width: max(50%, 272px); max-width: 100%;
+    box-shadow: 10px 0 28px rgba(15, 28, 38, .18);
+    transition: transform .24s cubic-bezier(.2, .8, .2, 1), visibility 0s linear 0s;
+  }
+  html[data-drawer][data-pane="chat"] .sidebar {
+    transform: translate3d(-100%, 0, 0); visibility: hidden;
+    transition: transform .24s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .24s;
+  }
+  html[data-drawer][data-drag="pane"] .sidebar { visibility: visible; transition: none; }
+  html[data-drawer] .drawer-scrim {
+    display: block; position: fixed; inset: 0; z-index: 3; background: rgba(10, 18, 26, .32);
+    opacity: 0; visibility: hidden; transition: opacity .24s ease, visibility 0s linear .24s;
+  }
+  html[data-drawer]:not([data-pane="chat"]) .drawer-scrim { opacity: 1; visibility: visible; transition: opacity .24s ease; }
 
   /* touch-action: what the browser may do with a touch before script sees it.
      The conversation pane only pans vertically, which frees horizontal movement
@@ -737,6 +767,7 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
   .identity-avatar { width: 40px; height: 40px; }
   .theme-button { width: auto; min-height: 42px; padding: 0 12px; font-size: 13px; }
   .theme-switch-label { display: inline; }
+  html[data-drawer] .theme-switch-label { display: none; }
 
   .topbar { min-height: 60px; padding: 0 6px 0 4px; }
   .back-button { display: grid; flex: none; margin-right: 2px; }
@@ -800,9 +831,10 @@ code { padding: 1px 4px; border: 1px solid var(--line); border-radius: 5px; back
   .modal-card input { height: 48px; padding: 0 12px; font-size: 16px; }
   .modal-card label.check-row { grid-template-columns: 24px minmax(0, 1fr); gap: 10px; padding: 11px 4px; }
   .modal-card label.check-row input { width: 20px; height: 20px; }
-  .check-row strong, .tls-heading strong, .setting-title { font-size: 14.5px; }
-  .check-row small, .field-note, .tls-heading span, .form-error { font-size: 13px; }
-  .tls-heading { flex-direction: column; gap: 2px; }
+  .check-row strong, .setting-title { font-size: 14.5px; }
+  .check-row small, .field-note, .form-error { font-size: 13px; }
+  .form-section > summary { min-height: 50px; font-size: 15px; }
+  .form-section > summary em { display: block; margin: 2px 0 0; font-size: 13px; }
   .modal-actions { gap: 10px; margin-top: 12px; }
   .primary-button, .secondary-button { min-height: 46px; padding: 0 18px; font-size: 15px; }
   .modal-actions .primary-button, .modal-actions .secondary-button { flex: 1 1 0; }
@@ -867,10 +899,11 @@ html[data-platform="android"] .protocol-line code { -webkit-user-select: text; u
 .jump-enter-from, .jump-leave-to { opacity: 0; transform: translateY(8px) scale(.9); }
 
 /* Message actions */
+/* The full message, selectable so part of it can be copied. */
 .action-preview {
   margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
-  color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden;
+  color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
 }
 .action-list { display: grid; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .action-list button {
@@ -925,6 +958,10 @@ html[data-theme="dark"] .markdown { --tok-comment: #a0abb0; --tok-string: #9dd48
 .markdown-code-block pre { padding: .75em .9em; overflow-x: auto; white-space: pre; overflow-wrap: normal; tab-size: 4; }
 .markdown-code-block pre code { display: block; width: max-content; min-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; }
 .markdown-copy-code { margin: 3px; }
+.markdown-table { max-width: 100%; margin: .35em 0; overflow-x: auto; touch-action: pan-x pan-y; }
+.markdown-table table { border-collapse: collapse; white-space: normal; }
+.markdown-table :is(th, td) { padding: .3em .7em; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.markdown-table th { background: var(--surface-2); font-weight: 700; }
 @media (pointer: coarse) { .markdown-copy-code { width: 44px; height: 44px; } }
 .irc-token-comment { color: var(--tok-comment); }
 .markdown code::highlight(ircapybara-comment) { color: var(--tok-comment); }

@@ -10,6 +10,7 @@
   const heading = /^ {0,3}(#{1,6})(?:[ \t]+(.*)|$)/;
   const quote = /^ {0,3}>[ \t]?(.*)$/;
   const item = /^ {0,3}([-+*]|\d{1,9}[.)])[ \t]+(.*)$/;
+  const tableDelimiter = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
 
   function safeURL(value) {
     if (!/^https?:\/\//i.test(value) || /[\s\\\u0000-\u001f\u007f]/.test(value)) return false;
@@ -87,6 +88,26 @@
     return nodes;
   }
 
+  // GFM table row cells. A backslash-escaped pipe stays inside its cell as a
+  // plain pipe, even within a code span.
+  function cells(line) {
+    let row = line.trim();
+    if (row.startsWith('|')) row = row.slice(1);
+    if (row.endsWith('|') && !row.endsWith('\\|')) row = row.slice(0, -1);
+    return row.split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
+  }
+
+  function table(header, delimiter, rows) {
+    const align = cells(delimiter).map(cell => cell.endsWith(':') ? (cell.startsWith(':') ? 'center' : 'right') : (cell.startsWith(':') ? 'left' : ''));
+    const row = (line, type) => ({ type: 'tr', children: align.map((side, i) => ({
+      type, attrs: side ? { style: { textAlign: side } } : null, children: inline(cells(line)[i] || ''),
+    })) });
+    return { type: 'table', children: [
+      { type: 'thead', children: [row(header, 'th')] },
+      { type: 'tbody', children: rows.map(line => row(line, 'td')) },
+    ] };
+  }
+
   function blocks(lines, depth = 0) {
     const result = [];
     let paragraph = [];
@@ -121,7 +142,7 @@
       } else if ((m = item.exec(line))) {
         flush();
         const marker = m[1].slice(-1), ordered = /[.)]/.test(marker);
-        const list = { type: ordered ? 'ol' : 'ul', start: ordered ? parseInt(m[1], 10) : undefined, children: [] };
+        const list = { type: ordered ? 'ol' : 'ul', attrs: ordered ? { start: parseInt(m[1], 10) } : null, children: [] };
         for (;;) {
           list.children.push({ type: 'li', children: inline(m[2]) });
           m = i < lines.length && item.exec(lines[i]);
@@ -129,6 +150,12 @@
           i++;
         }
         result.push(list);
+      } else if (line.includes('|') && i < lines.length && tableDelimiter.test(lines[i]) && cells(line).length === cells(lines[i]).length) {
+        flush();
+        const delimiter = lines[i++];
+        const rows = [];
+        while (i < lines.length && lines[i].includes('|') && !/^[ \t]*$/.test(lines[i])) rows.push(lines[i++]);
+        result.push(table(line, delimiter, rows));
       } else if (/^[ \t]*$/.test(line)) {
         flush();
         result.push({ type: 'blank' });
@@ -180,7 +207,8 @@
             }, [h('svg', { class: 'icon', 'aria-hidden': 'true' }, [h('use', { href: '#i-copy' })])]),
           ]);
           case 'blank': return h('div', { class: 'markdown-blank', 'aria-hidden': 'true' });
-          default: return h(node.type, node.type === 'ol' ? { start: node.start } : null, node.children.map(render));
+          case 'table': return h('div', { class: 'markdown-table' }, [h('table', node.children.map(render))]);
+          default: return h(node.type, node.attrs || null, node.children.map(render));
         }
       }
       return () => h('div', { class: 'message-text markdown' }, tree.value.map(render));

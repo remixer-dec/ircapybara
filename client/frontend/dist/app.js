@@ -44,6 +44,9 @@
       const platform = ref(native.platform);
       const mobilePane = ref('list');
       const isPhone = ref(phoneLayout.matches);
+      // On a phone the chat list fills the screen until a conversation has been
+      // opened; from then on it is a drawer over that conversation.
+      const paneOpened = ref(false);
       const actionMessage = ref(null);
       const awayFromLatest = ref(false);
       const arrivedBelow = ref(0);
@@ -99,6 +102,7 @@
       let initialized = false;
       let toastSeq = 0;
       let previousIdentityStatus = 'none';
+      let landing = { pending: false, timer: 0 };
       let audioContext = null;
       let notificationAudio = null;
       let notificationAudioUnlocked = false;
@@ -110,7 +114,7 @@
       const conversations = computed(() => Array.isArray(snapshot.value.conversations) ? snapshot.value.conversations : []);
       const visibleConversations = computed(() => conversations.value.filter(c => c.kind !== 'status'));
       const channelConversations = computed(() => visibleConversations.value.filter(c => ['channel', 'private-channel', 'plugin-channel'].includes(c.kind)));
-      const dmConversations = computed(() => visibleConversations.value.filter(c => ['dm', 'virtual-dm'].includes(c.kind)));
+      const dmConversations = computed(() => visibleConversations.value.filter(isDirect).sort((a, b) => !!b.pinned - !!a.pinned));
       const selectedConversation = computed(() => conversations.value.find(c => c.id === activeId.value) || conversations.value[0] || null);
       const isConnected = computed(() => snapshot.value.state !== 'disconnected');
       const canIdentify = computed(() => snapshot.value.registered && !snapshot.value.identified && snapshot.value.identityStatus !== 'pending' && snapshot.value.state !== 'captcha-pending');
@@ -123,13 +127,13 @@
       const canAttach = computed(() => canCompose.value && snapshot.value.extended);
       const codePointCount = computed(() => Array.from(draft.value).length);
       const canSend = computed(() => canCompose.value && draft.value.length > 0 && codePointCount.value <= 32768);
-      const canRequestHistory = computed(() => isConnected.value && selectedConversation.value && isChannel(selectedConversation.value) && !!selectedConversation.value.joined);
       const totalUnread = computed(() => visibleConversations.value.reduce((sum, conv) => sum + (Number(unread[conv.id]) || 0), 0));
       const canReconnect = computed(() => !isConnected.value && !!String(connection.host || '').trim() && !!String(connection.nick || '').trim());
       const themeTitle = computed(() => theme.value === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
       const isMobile = computed(() => platform.value !== 'desktop');
       // On a phone the conversation is only on screen while its pane is showing.
       const conversationVisible = computed(() => !isPhone.value || mobilePane.value === 'chat');
+      const drawerMode = computed(() => isPhone.value && paneOpened.value);
       const profileDetails = computed(() => buildProfileDetails(profileTarget.value?.name));
 
       const mentionSuggestions = computed(() => {
@@ -214,20 +218,27 @@
         if (!isConnected.value) return 'IRCapybara is ready';
         if (selectedConversation.value?.kind === 'status') return `Connected to ${serverLabel.value}`;
         if (isChannel(selectedConversation.value) && !selectedConversation.value.joined) return 'Open this channel to join';
-        return 'No messages yet';
+        if (isChannel(selectedConversation.value)) return `It's calm in ${selectedConversation.value.name}`;
+        return `Say hello to ${selectedConversation.value?.name || 'someone new'}`;
       });
 
       const emptyCopy = computed(() => {
         if (!isConnected.value) return 'Connect to a server to load its channel catalogue and conversations.';
         if (selectedConversation.value?.kind === 'status') return 'Server notices, transfer updates, identity feedback, and help output appear here.';
         if (isChannel(selectedConversation.value) && !selectedConversation.value.joined) return 'This channel came from the server catalogue. Selecting it joins only when you choose to open it.';
-        return 'This conversation is quiet. New messages will appear here as plain text.';
+        const opener = isChannel(selectedConversation.value)
+          ? 'Nobody has said anything yet. Start things off and the rest of the herd will follow.'
+          : 'This is the very beginning of your conversation. A friendly hello is a great start.';
+        return snapshot.value.markdown ? `${opener} Messages support Markdown: **bold**, \`code\`, lists, and tables.` : opener;
       });
 
       const composerPlaceholder = computed(() => selectedConversation.value ? `Message ${selectedConversation.value.name}…` : 'Message…');
-      const composerHint = computed(() => snapshot.value.extended
-        ? 'Enter to send · Shift+Enter for a new line · Plain text · Attachments available · 32,768 characters max'
-        : 'Enter to send · Shift+Enter for a new line · Plain text · 32,768 characters max');
+      const composerHint = computed(() => [
+        'Enter to send · Shift+Enter for a new line',
+        snapshot.value.markdown ? 'Markdown' : 'Plain text',
+        snapshot.value.extended ? 'Attachments available' : '',
+        '32,768 characters max',
+      ].filter(Boolean).join(' · '));
 
       const banner = computed(() => {
         const state = snapshot.value.state;
@@ -241,6 +252,10 @@
 
       function isChannel(conv) {
         return !!conv && ['channel', 'private-channel', 'plugin-channel'].includes(conv.kind);
+      }
+
+      function isDirect(conv) {
+        return !!conv && ['dm', 'virtual-dm'].includes(conv.kind);
       }
 
       function channelNickCandidates(conv) {
@@ -672,7 +687,9 @@
 
       function showDaySeparator(index, messages) {
         if (!messages || !messages[index]) return false;
-        if (index === 0) return true;
+        // A conversation that starts today needs no "Today" heading; the
+        // message times already say it.
+        if (index === 0) return dateKey(messages[0].time) !== dateKey(new Date());
         return dateKey(messages[index - 1].time) !== dateKey(messages[index].time);
       }
 
@@ -945,6 +962,39 @@
           closeModal();
         }
         if (viewMode.value === 'conversation') scrollMessages(false);
+        settleLanding(next);
+      }
+
+      // After connecting, land in the first channel auto-join opened, or on All
+      // Chats when nothing was joined shortly after registration. Navigating
+      // anywhere other than Home in the meantime cancels it.
+      const LANDING_WAIT_MS = 2500;
+
+      function startLanding() {
+        window.clearTimeout(landing.timer);
+        landing = { pending: true, timer: 0 };
+      }
+
+      function settleLanding(snap) {
+        if (!landing.pending) return;
+        const onHome = viewMode.value === 'conversation' && activeId.value === 'status';
+        if (!onHome) {
+          window.clearTimeout(landing.timer);
+          landing.pending = false;
+          return;
+        }
+        const joined = snap.conversations.find(c => isChannel(c) && c.joined);
+        if (joined) {
+          window.clearTimeout(landing.timer);
+          landing.pending = false;
+          openConversation(joined.id);
+        } else if (snap.registered && !landing.timer) {
+          landing.timer = window.setTimeout(() => {
+            if (!landing.pending) return;
+            landing.pending = false;
+            if (viewMode.value === 'conversation' && activeId.value === 'status') openOverview();
+          }, LANDING_WAIT_MS);
+        }
       }
 
       async function openConversation(id) {
@@ -953,6 +1003,7 @@
         activeId.value = id;
         viewMode.value = 'conversation';
         mobilePane.value = 'chat';
+        paneOpened.value = true;
         awayFromLatest.value = false;
         arrivedBelow.value = 0;
         unread[id] = 0;
@@ -976,6 +1027,7 @@
             activeId.value = 'status';
             viewMode.value = 'conversation';
             mobilePane.value = 'list';
+            paneOpened.value = false;
           }
         } catch (err) {
           showToast(errorText(err), 'error');
@@ -985,6 +1037,16 @@
       function openOverview() {
         viewMode.value = 'overview';
         mobilePane.value = 'chat';
+        paneOpened.value = true;
+      }
+
+      async function setPinned(conv, pinned) {
+        try {
+          await invoke('SetConversationPinned', conv.id, pinned);
+          showToast(pinned ? `${conv.name} is pinned to the sidebar.` : `${conv.name} is no longer pinned.`);
+        } catch (err) {
+          showToast(errorText(err), 'error');
+        }
       }
 
       function showList() {
@@ -1002,6 +1064,7 @@
           showList();
           return true;
         }
+        // The chat list (full screen or drawer) is the root: back leaves the app.
         return false;
       }
 
@@ -1176,6 +1239,7 @@
           connection.identityPassword = '';
           closeModal();
           openConversation('status');
+          startLanding();
         }
       }
 
@@ -1214,6 +1278,7 @@
           await invoke('Connect', cfg);
           connection.serverPassword = '';
           connection.identityPassword = '';
+          if (!reconnectTargetId.value && viewMode.value === 'conversation' && activeId.value === 'status') startLanding();
           showToast(`Reconnecting to ${connection.serverLabel || connection.host}…`);
         } catch (err) {
           formError.value = errorText(err);
@@ -1253,17 +1318,6 @@
           chatTarget.value = '';
           closeModal();
           openConversation(target);
-        }
-      }
-
-      async function requestHistory() {
-        const conv = selectedConversation.value;
-        if (!conv) return;
-        try {
-          await invoke('RequestHistory', conv.id, 0);
-          showToast(`Loading recent history for ${conv.name}…`);
-        } catch (err) {
-          showToast(errorText(err), 'error');
         }
       }
 
@@ -1331,7 +1385,8 @@
         const conv = selectedConversation.value;
         if (!conv) return;
         try {
-          await invoke('PickAndUpload', conv.id);
+          const name = await invoke('PickAndUpload', conv.id);
+          if (name) showToast(`Sending ${name}… It appears in the chat once the upload finishes.`, '', 5200);
         } catch (err) {
           showToast(errorText(err), 'error');
         }
@@ -1601,6 +1656,10 @@
       watch(theme, applyTheme, { immediate: true });
       watch(platform, value => { document.documentElement.dataset.platform = value; }, { immediate: true });
       watch(mobilePane, value => { document.documentElement.dataset.pane = value; }, { immediate: true });
+      watch(drawerMode, value => {
+        if (value) document.documentElement.dataset.drawer = '';
+        else delete document.documentElement.dataset.drawer;
+      }, { immediate: true });
       // Returning to a conversation pane counts as reading it.
       watch(conversationVisible, visible => {
         if (visible && viewMode.value === 'conversation') {
@@ -1627,6 +1686,8 @@
         native.onBack(goBack);
         eventCancels.push(window.IRCapybaraGestures.install({
           canSwipeBack: () => isPhone.value && mobilePane.value === 'chat' && !modal.value,
+          // In drawer mode the swipe pulls the chat list in over the conversation.
+          drawer: () => drawerMode.value ? document.querySelector('.sidebar') : null,
           onSwipeBack: () => { native.haptic('tap'); showList(); },
           canDismissSheet: () => isPhone.value && !!modal.value && modal.value !== 'captcha',
           onDismissSheet: closeModal,
@@ -1659,6 +1720,7 @@
 
       onBeforeUnmount(() => {
         for (const cancel of eventCancels) if (typeof cancel === 'function') cancel();
+        window.clearTimeout(landing.timer);
         eventCancels = [];
         document.removeEventListener('pointerdown', unlockNotificationAudio);
         try { audioContext?.close(); } catch (_) {}
@@ -1671,14 +1733,14 @@
         protocolTrace, notificationPrefs, appearancePrefs,
         channelConversations, dmConversations, visibleConversations, selectedConversation,
         isConnected, canIdentify, canOpenChats, canCompose, canAttach, canSend,
-        canRequestHistory, codePointCount, totalUnread, canReconnect, themeTitle,
+        codePointCount, totalUnread, canReconnect, themeTitle,
         serverLabel, statusLabel, statusClass, identityLabel, headerTitle, headerSubtitle,
         headerIcon, emptyTitle, emptyCopy, composerPlaceholder, composerHint, banner, mentionSuggestions, mentionIndex,
-        compactCount, avatarLetters, capybaraAvatar, kindLabel, conversationIcon, isOperator, openProfile, openProfileDM, profilePresence, profileLastSeen, formatTime, formatDateTime, formatTraceTime,
+        compactCount, avatarLetters, capybaraAvatar, kindLabel, isDirect, setPinned, conversationIcon, isOperator, openProfile, openProfileDM, profilePresence, profileLastSeen, formatTime, formatDateTime, formatTraceTime,
         showDaySeparator, formatDay, linkifyText, openExternalLink, formatBytes, fileBadge, lastPreview,
         openConversation, openOverview, showList, onMessagesScroll, jumpToLatest, firstLink, isOwnMessage,
         openMessageActions, copyActionMessage, copyCode, mentionActionSender, messageActionSender, closeConversation, openModal, closeModal, openSettings, openMembers, refreshMembers, connect, disconnect, reconnect, identify,
-        solveCaptcha, openChat, requestHistory, refreshChannels, requestHelp, resetAI, normalizeDraft,
+        solveCaptcha, openChat, refreshChannels, requestHelp, resetAI, normalizeDraft,
         sendMessage, pickAndUpload, downloadAttachment, restartAttachment, transferState, transferIsBusy, transferStatusLabel, transferButtonLabel, transferButtonIcon, pickTLSCertificate, toggleTheme,
         syncComposerCursor, handleComposerInput, handleComposerKeydown, selectMention,
         openProtocolLog, copyProtocolLog, systemNotificationChanged, testNotificationSound, testInAppNotification, bannerAction,

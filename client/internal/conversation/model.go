@@ -56,6 +56,7 @@ type Conversation struct {
 	Members     []Member  `json:"members,omitempty"`
 	Joined      bool      `json:"joined,omitempty"`
 	Catalogued  bool      `json:"catalogued,omitempty"`
+	Pinned      bool      `json:"pinned,omitempty"`
 	Messages    []Message `json:"messages"`
 }
 
@@ -349,6 +350,16 @@ func (s *Store) MarkDisconnected() {
 		s.items[i].Joined = false
 		s.items[i].Members = nil
 		s.items[i].OnlineCount = 0
+	}
+}
+
+func (s *Store) SetPinned(id string, pinned bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.items {
+		if strings.EqualFold(s.items[i].ID, id) {
+			s.items[i].Pinned = pinned
+		}
 	}
 }
 

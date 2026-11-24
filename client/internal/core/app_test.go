@@ -481,3 +481,80 @@ func TestDownloadIsPublishedThroughHost(t *testing.T) {
 		t.Fatalf("bootstrap transfers = %+v", boot.Transfers)
 	}
 }
+
+func TestJoinLoadsHistoryAndQuietsRepeatNotices(t *testing.T) {
+	server := newFakeServer(t, func(s *fakeServer, line string) {
+		if line == "CAP LS 302" {
+			s.send(":srv CAP * LS :server-time ircapybara/history batch draft/multiline=max-bytes=131072,max-lines=512")
+			return
+		}
+		if registration(s, line) {
+			return
+		}
+		if line == "HISTORY #general" {
+			s.send(
+				":srv NOTICE alice :History is disabled for #general",
+				":srv NOTICE alice :Extended mode enabled for attachments",
+				":srv NOTICE alice :Extended mode enabled for attachments",
+				":srv NOTICE alice :done",
+			)
+		}
+	})
+	host := newRecordingHost(t)
+	connectTestApp(t, host, server)
+
+	host.waitFor(t, "the notices that follow the automatic history request", func() bool {
+		home, _ := host.conversation("status")
+		return len(home.Messages) > 0 && home.Messages[len(home.Messages)-1].Text == "done"
+	})
+	home, _ := host.conversation("status")
+	var texts []string
+	for _, m := range home.Messages {
+		texts = append(texts, m.Text)
+	}
+	if !slices.Equal(texts, []string{"Extended mode enabled for attachments", "done"}) {
+		t.Fatalf("Home messages = %q", texts)
+	}
+}
+
+func TestPinnedDirectMessageSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	first := New(Options{ConfigDir: dir})
+	if err := first.SetConversationPinned("#general", true); err == nil {
+		t.Fatal("channels should not be pinnable")
+	}
+	if err := first.SetConversationPinned("bob", true); err != nil {
+		t.Fatal(err)
+	}
+	first.Shutdown()
+
+	second := New(Options{ConfigDir: dir})
+	defer second.Shutdown()
+	conv, ok := second.convs.Get("bob")
+	if !ok || !conv.Pinned || conv.Kind != conversation.DM {
+		t.Fatalf("pinned DM after restart = %+v, %v", conv, ok)
+	}
+	if err := second.CloseConversation("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if settings := second.Bootstrap().Settings; len(settings.PinnedDMs) != 0 {
+		t.Fatalf("closing should unpin, saved %q", settings.PinnedDMs)
+	}
+}
+
+func TestChunkPacerStaysUnderServerRate(t *testing.T) {
+	var p chunkPacer
+	start := time.Now()
+	for range uploadChunkBurst {
+		p.wait()
+	}
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("the burst should not wait, took %v", elapsed)
+	}
+	for range 20 {
+		p.wait()
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Fatalf("20 chunks past the burst should take ~100ms, took %v", elapsed)
+	}
+}

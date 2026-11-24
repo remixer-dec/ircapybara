@@ -23,6 +23,11 @@ type Settings struct {
 	Theme                 string   `json:"theme,omitempty"`
 	TLSMode               string   `json:"tlsMode,omitempty"`
 	PinnedCertificatePath string   `json:"pinnedCertificatePath,omitempty"`
+	// PinnedDMs are direct-message targets kept in the sidebar across restarts.
+	PinnedDMs []string `json:"pinnedDMs,omitempty"`
+	// ExtendedNoticeServers lists the servers whose extended-mode notice has
+	// already been shown once.
+	ExtendedNoticeServers []string `json:"extendedNoticeServers,omitempty"`
 }
 
 // Store intentionally excludes passwords and other credentials.
